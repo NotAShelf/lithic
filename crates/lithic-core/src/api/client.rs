@@ -23,7 +23,9 @@ pub const LITHIC_USER_AGENT: &str = concat!(
    env!("CARGO_PKG_NAME"),
    "/",
    env!("CARGO_PKG_VERSION"),
-   "  (github: Tekunogosu/Lithic)"
+   " (+",
+   env!("CARGO_PKG_REPOSITORY"),
+   ")"
 );
 
 #[derive(Debug, Clone)]
@@ -93,6 +95,23 @@ impl ApiClient {
    pub fn api_uri(endpoint: &str) -> String {
       format!("{API_BASE_URL}/{endpoint}")
    }
+
+   /// Validate the API's own `statuscode` envelope. The VS API returns HTTP 200
+   /// even for logical errors (e.g. `"410"` for deprecated endpoints) and the
+   /// real outcome is conveyed by the `statuscode` field in the JSON body.
+   ///
+   /// Accepts `""` as a non-error to remain compatible with payloads that omit
+   /// the field entirely (`serde(default)` produces an empty string).
+   fn check_api_status(status_code: &str, endpoint: &str, reason: Option<&str>) -> Result<(), LithicError> {
+      if status_code.is_empty() || status_code == "200" {
+         return Ok(());
+      }
+      Err(LithicError::ApiStatusError {
+         endpoint: endpoint.to_string(),
+         status_code: status_code.to_string(),
+         reason: reason.map(str::to_string),
+      })
+   }
    fn cdn_uri_stable(endpoint: &str) -> String {
       format!("{VS_CDN_STABLE_RELEASE}/{endpoint}")
    }
@@ -112,10 +131,12 @@ impl ApiClient {
                source: e,
             })?;
 
-      response.json::<Mods>().await.map_err(|e| LithicError::ApiError {
+      let mods = response.json::<Mods>().await.map_err(|e| LithicError::ApiError {
          context: "fetch_all_mods (json): ".to_string(),
          source: e,
-      })
+      })?;
+      Self::check_api_status(&mods.status_code, "mods", None)?;
+      Ok(mods)
    }
 
    /// Fetches mods compatible with the given MAJOR.MINOR game version (e.g. "1.20").
@@ -130,10 +151,12 @@ impl ApiClient {
             source: e,
          })?;
 
-      response.json::<Mods>().await.map_err(|e| LithicError::ApiError {
+      let mods = response.json::<Mods>().await.map_err(|e| LithicError::ApiError {
          context: format!("fetch_mods_with_gameversion (json) ({version}): "),
          source: e,
-      })
+      })?;
+      Self::check_api_status(&mods.status_code, &format!("mods?gameversion={version}"), None)?;
+      Ok(mods)
    }
 
    pub async fn fetch_mod(&self, mod_id: impl AsRef<str>) -> Result<Mod, LithicError> {
@@ -182,6 +205,7 @@ impl ApiClient {
 
       let parsed: Mod = serde_json::from_str(&text).map_err(|e| LithicError::SimpleError(e.to_string()))?;
       debug!("Parsed {:?}", parsed);
+      Self::check_api_status(&parsed.status_code, &format!("mod/{mod_id}"), None)?;
 
       Ok(parsed)
    }
@@ -272,6 +296,7 @@ impl ApiClient {
 
       let versions: GameVersions =
          serde_json::from_str(&text).map_err(|e| LithicError::SimpleError(e.to_string()))?;
+      Self::check_api_status(&versions.status_code, "gameversions", None)?;
 
       let hash: HashSet<String> = versions
          .game_versions

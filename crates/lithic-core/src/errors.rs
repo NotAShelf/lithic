@@ -59,6 +59,15 @@ pub enum LithicError {
       #[source]
       source: toml::de::Error,
    },
+   /// The VS API returned HTTP 200 but the JSON payload contains a non-`"200"`
+   /// `statuscode` field. The API uses this convention to signal logical errors
+   /// (e.g. `"410"` for deprecated endpoints) while still returning 200.
+   #[error("API returned status {status_code} for {endpoint}{}", reason.as_deref().map_or(String::new(), |r| format!(": {r}")))]
+   ApiStatusError {
+      endpoint: String,
+      status_code: String,
+      reason: Option<String>,
+   },
 }
 
 impl From<std::io::Error> for LithicError {

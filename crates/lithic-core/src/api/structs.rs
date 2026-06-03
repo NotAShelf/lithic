@@ -445,8 +445,10 @@ pub struct Tags {
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct Tag {
+   // `/api/tags` returns `tagid` as a string ("467"), while `/api/gameversions`
+   // returns it as an integer. Accept either shape.
    #[serde(default, rename = "tagid")]
-   pub tag_id: i64,
+   pub tag_id: StringOrInt,
    #[serde(default)]
    pub name: String,
    #[serde(default)]
@@ -520,6 +522,8 @@ pub struct Comment {
 pub struct ChangeLogs {
    #[serde(default, rename = "statuscode")]
    pub status_code: String,
+   #[serde(default)]
+   pub reason: Option<String>,
    #[serde(default, rename = "changelogs")]
    pub changelogs: Vec<ChangeLog>,
 }
