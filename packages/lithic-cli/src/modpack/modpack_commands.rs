@@ -243,7 +243,26 @@ pub async fn parse_modpack_commands(commands: &ModpackCommands, mod_dir: impl As
                }
             }
          }
-         MPLocalSubCommands::Delete => {}
+         MPLocalSubCommands::Delete(largs) => match delete_mpk_cmd(largs.mpk_id.clone().into()).await {
+            Ok(mpk_id) => {
+               let mut config = get_config().write().await;
+               config
+                  .modpacks
+                  .disabled
+                  .retain(|m| !m.eq_ignore_ascii_case(mpk_id.as_ref()));
+               if let Err(e) = config.save(None) {
+                  error!("{}", e.to_string().red().bold());
+               }
+               notice(
+                  format!("Local modpack {mpk_id} deleted."),
+                  Some(Color::Green),
+                  vec![Attribute::Bold],
+               );
+            }
+            Err(e) => {
+               notice(e.to_string(), Some(Color::Yellow), vec![Attribute::Bold]);
+            }
+         },
       },
    }
 }

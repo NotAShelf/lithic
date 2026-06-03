@@ -173,8 +173,16 @@ pub enum MPLocalSubCommands {
    /// List all locally created modpacks. It ONLY shows the modpacks you've created, use `Lithic modpack list` to see the modpacks you installed.
    List(MPLocalListOutputArgs),
 
-   /// This feature is being worked on...
-   Delete,
+   /// Delete a locally created modpack (the .zip in `mypacks` and, when present,
+   /// the staging directory). Refuses to act on the modpack that is currently
+   /// enabled; disable it first.
+   Delete(MPLocalDeleteArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct MPLocalDeleteArgs {
+   /// ID of the locally created modpack to delete. See `Lithic modpack local list`.
+   pub mpk_id: String,
 }
 
 #[derive(Args, Debug, Clone)]
