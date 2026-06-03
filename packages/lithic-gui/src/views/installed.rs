@@ -161,25 +161,34 @@ fn packs_body<'a>(state: &'a InstalledView, loc: &'a Localizer) -> Element<'a, M
             text(loc.get("installed-create-modpack-title")).size(14),
             row![
                text(loc.get("installed-name")).size(12).width(70),
-               text_input("e.g. My Pack", &state.create_name)
-                  .on_input(Message::CreatePackName)
-                  .width(Fill),
+               text_input(
+                  loc.get("installed-create-name-placeholder").as_ref(),
+                  &state.create_name
+               )
+               .on_input(Message::CreatePackName)
+               .width(Fill),
             ]
             .spacing(8)
             .align_y(Alignment::Center),
             row![
                text(loc.get("installed-id")).size(12).width(70),
-               text_input("e.g. mypack", &state.create_id)
-                  .on_input(Message::CreatePackId)
-                  .width(Fill),
+               text_input(
+                  loc.get("installed-create-id-placeholder").as_ref(),
+                  &state.create_id
+               )
+               .on_input(Message::CreatePackId)
+               .width(Fill),
             ]
             .spacing(8)
             .align_y(Alignment::Center),
             row![
                text(loc.get("installed-version")).size(12).width(70),
-               text_input("e.g. 1.0.0", &state.create_version)
-                  .on_input(Message::CreatePackVersion)
-                  .width(Fill),
+               text_input(
+                  loc.get("installed-create-version-placeholder").as_ref(),
+                  &state.create_version
+               )
+               .on_input(Message::CreatePackVersion)
+               .width(Fill),
             ]
             .spacing(8)
             .align_y(Alignment::Center),

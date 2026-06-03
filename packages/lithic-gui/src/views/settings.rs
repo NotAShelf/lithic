@@ -3,7 +3,7 @@ use std::fmt::{Display, Formatter};
 use iced::widget::{button, checkbox, column, pick_list, row, scrollable, text, text_input};
 use iced::{Alignment, Color, Element, Fill};
 use lithic_core::version::filter::minor_version;
-use lithic_locale::{Localizer, ids};
+use lithic_locale::{Localizer, ids, locale};
 
 use crate::app::Message;
 use crate::widgets::{section_card, section_label, status_element};
@@ -61,12 +61,16 @@ impl ThemeModeOption {
 
 impl Display for ThemeModeOption {
    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-      match self {
-         Self::System => write!(f, "System"),
-         Self::Light => write!(f, "Light"),
-         Self::Dark => write!(f, "Dark"),
-         Self::Preset => write!(f, "Preset"),
-      }
+      // iced's `pick_list` renders dropdown items via this `Display` impl, so
+      // route the visible label through the global localizer instead of hard-
+      // coding English.
+      let id = match self {
+         Self::System => "settings-theme-system",
+         Self::Light => "settings-theme-light",
+         Self::Dark => "settings-theme-dark",
+         Self::Preset => "settings-theme-preset-mode",
+      };
+      f.write_str(&locale().get(id))
    }
 }
 
@@ -112,13 +116,16 @@ impl InitialPageOption {
 
 impl Display for InitialPageOption {
    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-      match self {
-         Self::Browse => write!(f, "Browse"),
-         Self::Installed => write!(f, "Installed"),
-         Self::Instances => write!(f, "Instances"),
-         Self::GameVersions => write!(f, "Game Versions"),
-         Self::Settings => write!(f, "Settings"),
-      }
+      // Reuse the nav-* keys so the startup-page picker matches the sidebar
+      // exactly, in any future locale.
+      let id = match self {
+         Self::Browse => ids::NAV_BROWSE,
+         Self::Installed => ids::NAV_INSTALLED,
+         Self::Instances => ids::NAV_INSTANCES,
+         Self::GameVersions => ids::NAV_GAME_VERSIONS,
+         Self::Settings => ids::NAV_SETTINGS,
+      };
+      f.write_str(&locale().get(id))
    }
 }
 

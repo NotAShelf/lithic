@@ -36,14 +36,16 @@ pub struct InstancesView {
 }
 
 pub fn view<'a>(state: &'a InstancesView, loc: &'a Localizer) -> Element<'a, Message> {
-   let header = row![
-      text(loc.get("instances-title")).size(22).width(Fill),
-      button(text(loc.get("instances-launch-active")))
-         .on_press(Message::LaunchActiveInstance)
-         .style(primary_btn_style),
-   ]
-   .spacing(8)
-   .align_y(Alignment::Center);
+   // Only allow Launch when an active instance is actually selected. Without
+   // this guard the button fires `LaunchActiveInstance`, the launch fails
+   // inside `ops`, and the user just sees a status banner with no recourse.
+   let mut launch_btn = button(text(loc.get("instances-launch-active"))).style(primary_btn_style);
+   if !state.active_instance_id.is_empty() {
+      launch_btn = launch_btn.on_press(Message::LaunchActiveInstance);
+   }
+   let header = row![text(loc.get("instances-title")).size(22).width(Fill), launch_btn,]
+      .spacing(8)
+      .align_y(Alignment::Center);
 
    let active_summary = state
       .instances

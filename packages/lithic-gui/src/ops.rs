@@ -18,11 +18,17 @@ use lithic_core::utils::{
 };
 use lithic_core::version::filter::{VersionFilter, minor_versions_at_least, unique_minor_versions};
 use lithic_core::version::manager::parse_latest_version;
+use lithic_locale::locale;
 
 const FAVORITES_FILE: &str = "lithic-gui-favorites.json";
 
 fn err(e: impl ToString) -> String {
    e.to_string()
+}
+
+/// Convenience: localized message body for a fluent id with no args.
+fn loc_msg(id: &str) -> String {
+   locale().get(id).into_owned()
 }
 
 #[derive(Debug, Clone, Default)]
@@ -111,7 +117,7 @@ async fn build_basic_installed(mod_dir: &Path) -> Result<HashMap<String, ModSync
 
 pub async fn sync_mods(mod_dir: PathBuf) -> Result<HashMap<String, ModSyncInfo>, String> {
    if mod_dir.as_os_str().is_empty() || !mod_dir.exists() {
-      return Err("Mods directory is not set or does not exist. Configure it in Settings.".to_string());
+      return Err(loc_msg("ops-mods-dir-missing"));
    }
    let scanned = build_basic_installed(&mod_dir).await?;
 
@@ -140,11 +146,11 @@ pub async fn sync_mods(mod_dir: PathBuf) -> Result<HashMap<String, ModSyncInfo>,
 
 pub async fn update_all(mod_dir: PathBuf) -> Result<(), String> {
    if mod_dir.as_os_str().is_empty() || !mod_dir.exists() {
-      return Err("Mods directory not configured.".to_string());
+      return Err(loc_msg("ops-mods-dir-not-configured"));
    }
    let sync_file = mod_dir.join(FILE_LITHIC_SYNC);
    if !sync_file.exists() {
-      return Err("No sync data found. Run sync first.".to_string());
+      return Err(loc_msg("ops-no-sync-data"));
    }
    let sync_data = parse_json_file::<LithicSyncJson>(&sync_file).await.map_err(err)?;
 
@@ -234,7 +240,7 @@ pub fn search_mods(all_mods: &[ModApi], query: &str) -> Vec<ModApi> {
 
 pub async fn install_mod(mod_dir: PathBuf, mod_id: String) -> Result<String, String> {
    if mod_dir.as_os_str().is_empty() || !mod_dir.exists() {
-      return Err("Mods directory not configured. Set it in Settings first.".to_string());
+      return Err(loc_msg("ops-mods-dir-not-configured-settings"));
    }
    let sync_file = mod_dir.join(FILE_LITHIC_SYNC);
    let mut sync_map: HashMap<String, ModSyncInfo> = if sync_file.exists() {
@@ -314,9 +320,9 @@ pub async fn install_mod(mod_dir: PathBuf, mod_id: String) -> Result<String, Str
 pub async fn install_mod_to_active_instance(mod_id: String) -> Result<String, String> {
    let instance = lithic_core::instance::get_active_instance()
       .await?
-      .ok_or_else(|| "No active instance selected.".to_string())?;
+      .ok_or_else(|| loc_msg("ops-no-active-instance"))?;
    if instance.mods_dir.trim().is_empty() {
-      return Err("Active instance has no mods directory.".to_string());
+      return Err(loc_msg("ops-active-instance-no-mods-dir"));
    }
    tokio::fs::create_dir_all(&instance.mods_dir).await.map_err(err)?;
    install_mod(PathBuf::from(instance.mods_dir), mod_id).await
@@ -360,7 +366,7 @@ pub async fn enable_pack(id: String) -> Result<String, String> {
       config.modpacks.disabled.retain(|m| m != &id);
       config.save(None).map_err(err)?;
    }
-   Ok(format!("{id} enabled"))
+   Ok(locale().get_with("ops-pack-enabled", "id", id).into_owned())
 }
 
 pub async fn disable_pack(id: String) -> Result<String, String> {
@@ -370,7 +376,7 @@ pub async fn disable_pack(id: String) -> Result<String, String> {
       config.modpacks.disabled.push(id.clone());
    }
    config.save(None).map_err(err)?;
-   Ok(format!("{id} disabled"))
+   Ok(locale().get_with("ops-pack-disabled", "id", id).into_owned())
 }
 
 pub async fn create_pack(
@@ -385,7 +391,7 @@ pub async fn create_pack(
    };
 
    if modpack_dir.is_empty() {
-      return Err("Modpack directory not configured. Set it in Settings first.".to_string());
+      return Err(loc_msg("ops-modpack-dir-not-configured"));
    }
 
    let installed = load_installed_from(mod_dir).await?;
@@ -426,7 +432,15 @@ pub async fn create_pack(
       config.save(None).map_err(err)?;
    }
 
-   Ok(format!("Created modpack '{name}' at {}", save_path.display()))
+   Ok(locale()
+      .get_with2(
+         "ops-pack-created",
+         "name",
+         name,
+         "path",
+         save_path.display().to_string(),
+      )
+      .into_owned())
 }
 
 pub async fn load_game_versions() -> Result<Vec<String>, String> {
@@ -557,7 +571,7 @@ pub async fn load_active_instance() -> Result<Option<InstanceConfig>, String> {
 pub async fn upsert_instance(form: InstanceFormData) -> Result<(), String> {
    let id = form.id.trim().to_string();
    if id.is_empty() {
-      return Err("Instance id cannot be empty".to_string());
+      return Err(loc_msg("ops-instance-id-empty"));
    }
    let name = if form.name.trim().is_empty() {
       id.clone()
@@ -670,9 +684,13 @@ pub async fn install_game_version(
    if let Ok(mut p) = progress.lock() {
       *p = GameInstallProgress {
          active: true,
-         stage: "Starting".to_string(),
+         stage: loc_msg("ops-game-install-stage-starting"),
          percent: Some(0),
-         logs: vec![format!("Starting install for Vintage Story {version}")],
+         logs: vec![
+            locale()
+               .get_with("ops-game-install-log-starting", "version", version.clone())
+               .into_owned(),
+         ],
          done: false,
          error: None,
       };
@@ -720,14 +738,23 @@ pub async fn install_game_version(
    if let Ok(mut p) = progress.lock() {
       p.done = true;
       p.active = false;
-      p.stage = "Complete".to_string();
+      p.stage = loc_msg("ops-game-install-stage-complete");
       p.percent = Some(100);
-      p.logs.push(format!("Finished install at {}", installed.path));
+      p.logs.push(
+         locale()
+            .get_with("ops-game-install-log-finished", "path", installed.path.clone())
+            .into_owned(),
+      );
    }
-   Ok(format!(
-      "Installed Vintage Story {} at {}",
-      installed.version, installed.path
-   ))
+   Ok(locale()
+      .get_with2(
+         "ops-game-install-result",
+         "version",
+         installed.version,
+         "path",
+         installed.path,
+      )
+      .into_owned())
 }
 
 pub async fn pick_folder() -> Result<String, String> {
@@ -767,7 +794,7 @@ pub async fn pick_folder() -> Result<String, String> {
                 }
             }
         }
-        Err("No supported folder picker found.".to_string())
+        Err(loc_msg("ops-folder-picker-missing"))
     })
     .await
     .map_err(|e| e.to_string())?
