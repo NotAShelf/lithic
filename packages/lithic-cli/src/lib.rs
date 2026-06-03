@@ -26,6 +26,7 @@ pub mod updater;
 pub mod windows_funcs;
 
 use crate::cli_commands::{Cli, Commands, ShellType};
+use crate::commands::changelog::changelog as changelog_cmd;
 use crate::commands::config::parse_config_args;
 use crate::commands::delete::{delete_all, delete_cmd};
 use crate::commands::download::download;
@@ -347,6 +348,14 @@ pub async fn run() -> Result<()> {
             error!("Launch failed: {e}");
             exit(1);
          }
+      }
+      Commands::Changelog(args) => {
+         handle_err_result(
+            changelog_cmd(args).await,
+            "Changelog failed:",
+            true,
+            ErrorMsgFn::Error,
+         );
       }
    }
    Ok(())

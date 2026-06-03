@@ -1,3 +1,4 @@
+use crate::commands::arg_structs::changelog_args::ChangeLogArgs;
 use crate::commands::arg_structs::config_args::ConfigCommand;
 use crate::commands::arg_structs::delete_args::DeleteArgs;
 use crate::commands::arg_structs::download_args::DownloadArgs;
@@ -108,6 +109,9 @@ pub enum Commands {
 
    #[command(about = "Launch Vintage Story using the selected instance")]
    Launch(LaunchArgs),
+
+   #[command(about = "Show the release changelog of a mod")]
+   Changelog(ChangeLogArgs),
 }
 
 #[derive(Args, Debug)]
