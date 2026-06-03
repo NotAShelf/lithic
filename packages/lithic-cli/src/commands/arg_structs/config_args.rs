@@ -70,12 +70,10 @@ pub struct CommonArgs {
    #[arg(short, long)]
    pub backup_mods: Option<bool>,
 
-   /// Directory for mod backups
+   /// Directory for mod backups.
    ///
-   /// Default: (Linux): ~/.config/lithic/mod_backups
-   ///
-   ///          (Windows) %appdata%/lithic/mod_backups
-   ///
+   /// Default on Linux: `~/.config/lithic/mod_backups`.
+   /// Default on Windows: `%appdata%/lithic/mod_backups`.
    #[arg(short = 'B', long, value_name = "DIR")]
    pub backup_mods_dir: Option<String>,
 

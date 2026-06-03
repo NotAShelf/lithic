@@ -126,19 +126,22 @@ where
 {
    let group = cell_or_header(&arg.group);
    let mut fields: Vec<T> = vec![];
-   if arg.field.is_some() {
-      let field = arg.field.as_ref().unwrap_or_else(|| panic!("Invalid field type"));
+   if let Some(field) = arg.field.as_ref() {
       fields.push(field.clone());
    } else if !arg.fields.is_empty() {
       fields.clone_from(&arg.fields);
    } else {
-      panic!("Invalid field type");
+      error!("You must pass either --field <FIELD> or --fields <FIELD>...");
+      exit(1);
    }
 
    let (main, other) = match group.as_str() {
       "headers" => (&mut section.headers, &mut section.cells),
       "cells" => (&mut section.cells, &mut section.headers),
-      _ => panic!("Invalid group"),
+      _ => {
+         error!("Unknown table group {group:?}; expected `headers` or `cells`");
+         exit(1);
+      }
    };
 
    let color = &arg.color;
