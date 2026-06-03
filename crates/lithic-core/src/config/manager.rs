@@ -10,7 +10,7 @@ use dirs::home_dir;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -24,7 +24,7 @@ use yansi::Paint;
 pub struct Config {
    /// this sets the default mod dir so you don't have to type -m everytime
    #[serde(default)]
-   pub mod_dir: String,
+   pub mod_dir: PathBuf,
    // this tells lithic which versions of the game to download mods for.
    // It will download mods up to this version and not over
    #[serde(default)]
@@ -39,7 +39,7 @@ pub struct Config {
    // location for the mod backups
    // default ~/.config/lithic/backups
    #[serde(default)]
-   pub backup_mods_dir: String,
+   pub backup_mods_dir: PathBuf,
 
    #[cfg(windows)]
    pub update_default_windows_loc: bool,
@@ -52,7 +52,7 @@ pub struct Config {
    pub notify_of_unzipped_mods: bool,
 
    #[serde(default)]
-   pub game_download_dir: String,
+   pub game_download_dir: PathBuf,
 
    #[serde(default)]
    pub check_for_updates: bool,
@@ -99,7 +99,7 @@ fn default_true() -> bool {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ModPacks {
    #[serde(default)]
-   pub modpack_dir: String,
+   pub modpack_dir: PathBuf,
    #[serde(default)]
    pub enabled: Vec<String>,
    #[serde(default)]
@@ -111,7 +111,7 @@ pub struct ModPacks {
 impl Default for ModPacks {
    fn default() -> Self {
       Self {
-         modpack_dir: Config::data_path().join("modpacks").to_string_lossy().to_string(),
+         modpack_dir: Config::data_path().join("modpacks"),
          enabled: vec![],
          disabled: vec![],
       }
@@ -183,21 +183,14 @@ impl Default for Config {
       info!("modpack_dir {}", modpack_dir.display());
 
       Self {
-         mod_dir: LithicOptions::default()
-            .mod_dir
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string(),
+          mod_dir: LithicOptions::default().mod_dir.unwrap_or_default(),
          pinned_game_version: String::new(), // if its empty then get the latest
          zip_mod_files: false,
          backup_mods: false,
-         backup_mods_dir: backup_mods_dir.to_string_lossy().to_string(),
+          backup_mods_dir,
          show_execution_time: true,
          notify_of_unzipped_mods: false,
-         game_download_dir: dirs::download_dir()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string(),
+          game_download_dir: dirs::download_dir().unwrap_or_default(),
          sync_latest_game_version_file_every: 24,
          sync_mod_search_file_every: 24,
          pkg: Vec::default(),
@@ -235,12 +228,12 @@ impl Config {
          let toml_content = toml::to_string_pretty(&default_config)
             .map_err(|e| LithicError::ConfigFileError(format!("Failed to serialize default config: {e}")))?;
 
-         let mut file = File::create(&config_file_path)
-            .map_err(|e| LithicError::ConfigFileError(format!("Failed to create config file at: {e}")))?;
-
-         file
-            .write_all(toml_content.as_bytes())
-            .map_err(|e| LithicError::ConfigFileError(format!("Failed writing config file: {e}")))?;
+         crate::utils::write_atomic_sync(&config_file_path, toml_content.as_bytes()).map_err(|e| {
+            LithicError::ConfigFileError(format!(
+               "Failed to write default config file {}: {e}",
+               config_file_path.display()
+            ))
+         })?;
 
          println!(
             "{} {}",
@@ -295,19 +288,22 @@ impl Config {
       Ok(())
    }
 
+   /// Persist the config to `<config_dir>/config.toml`. Writes are atomic
+   /// (temp file + rename) so a crash mid-write cannot corrupt the live file.
    pub fn save(&self, config_dir: Option<PathBuf>) -> Result<(), LithicError> {
+      ensure_config_can_save(CONFIG_LOAD_ERROR.get().map(String::as_str))?;
       let config_path = config_dir.unwrap_or_else(Self::get_path);
       let config_file_path = config_path.join("config.toml");
 
       let toml_content = toml::to_string_pretty(self)
          .map_err(|e| LithicError::ConfigFileError(format!("Failed to serialize config: {e}")))?;
 
-      File::create(&config_file_path)
-         .map_err(|e| LithicError::ConfigFileError(format!("Failed to create config file: {e}")))?
-         .write_all(toml_content.as_bytes())
-         .map_err(|e| LithicError::ConfigFileError(format!("Failed to write config file: {e}")))?;
-
-      Ok(())
+      crate::utils::write_atomic_sync(&config_file_path, toml_content.as_bytes()).map_err(|e| {
+         LithicError::ConfigFileError(format!(
+            "Failed to write config file {}: {e}",
+            config_file_path.display()
+         ))
+      })
    }
 }
 
@@ -364,10 +360,22 @@ pub fn backup_config(config_path: impl AsRef<Path>, message: Option<String>) -> 
 }
 
 static CONFIG: OnceLock<RwLock<Config>> = OnceLock::new();
+static CONFIG_LOAD_ERROR: OnceLock<String> = OnceLock::new();
+
+fn ensure_config_can_save(load_error: Option<&str>) -> Result<(), LithicError> {
+   load_error.map_or(Ok(()), |error| {
+      Err(LithicError::ConfigFileError(format!(
+         "refusing to overwrite config after a load failure: {error}"
+      )))
+   })
+}
 
 // Initiate the CONFIG in the main file so its ready everywhere else
 pub fn init_config() -> Result<(), LithicError> {
-   let config = Config::new()?;
+   let config = Config::new().map_err(|e| {
+      let _ = CONFIG_LOAD_ERROR.set(e.to_string());
+      e
+   })?;
 
    if CONFIG.set(RwLock::new(config)).is_err() {
       return Err(LithicError::ConfigFileError(
@@ -378,7 +386,32 @@ pub fn init_config() -> Result<(), LithicError> {
    Ok(())
 }
 
+/// Return the process-wide config handle.
+///
+/// `init_config` should be called at startup so the returned handle reflects
+/// the on-disk file. If something goes wrong and `get_config` is reached
+/// before initialisation, it falls back to in-memory defaults. If loading
+/// failed, [`Config::save`] refuses to overwrite the on-disk configuration.
 pub fn get_config() -> &'static RwLock<Config> {
-   info!("get_config() called");
-   CONFIG.get_or_init(|| RwLock::new(Config::new().expect("Failed to load config")))
+   CONFIG.get_or_init(|| {
+      let config = Config::new().unwrap_or_else(|e| {
+         let _ = CONFIG_LOAD_ERROR.set(e.to_string());
+         tracing::error!(
+            "config not initialised and lazy load failed ({e}); using in-memory defaults"
+         );
+         Config::default()
+      });
+      RwLock::new(config)
+   })
+}
+
+#[cfg(test)]
+mod tests {
+   use super::ensure_config_can_save;
+
+   #[test]
+   fn config_save_is_blocked_after_a_load_failure() {
+      assert!(ensure_config_can_save(None).is_ok());
+      assert!(ensure_config_can_save(Some("invalid TOML")).is_err());
+   }
 }

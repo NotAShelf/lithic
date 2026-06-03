@@ -2,13 +2,14 @@ use crate::commands::arg_structs::instance_args::{
    InstanceCommands, InstanceSubCommands, InstanceUpsertArgs,
 };
 use lithic_core::instance::{InstanceConfig, get_active_instance};
+use std::path::PathBuf;
 
 fn to_instance(args: &InstanceUpsertArgs) -> InstanceConfig {
    InstanceConfig {
       id: args.id.clone(),
       name: args.name.clone(),
-      data_dir: args.data_dir.clone(),
-      mods_dir: args.mods_dir.clone(),
+      data_dir: PathBuf::from(&args.data_dir),
+      mods_dir: PathBuf::from(&args.mods_dir),
       game_version_id: args.game_version_id.clone(),
       enabled_modpacks: Vec::new(),
       start_params: args.start_params.clone(),
@@ -18,6 +19,12 @@ fn to_instance(args: &InstanceUpsertArgs) -> InstanceConfig {
    }
 }
 
+/// Dispatch instance subcommands.
+///
+/// # Errors
+///
+/// Returns an error if loading, saving, deleting, activating, or launching an
+/// instance fails.
 pub async fn parse_instance_commands(commands: &InstanceCommands) -> Result<(), String> {
    match &commands.subcommand {
       InstanceSubCommands::List => {
@@ -25,7 +32,10 @@ pub async fn parse_instance_commands(commands: &InstanceCommands) -> Result<(), 
          for inst in instances {
             println!(
                "{}\t{}\t{}\t{}",
-               inst.id, inst.name, inst.mods_dir, inst.game_version_id
+               inst.id,
+               inst.name,
+               inst.mods_dir.display(),
+               inst.game_version_id
             );
          }
          Ok(())
@@ -35,7 +45,11 @@ pub async fn parse_instance_commands(commands: &InstanceCommands) -> Result<(), 
          if let Some(inst) = active {
             println!(
                "active: {}\nname: {}\nmods_dir: {}\ndata_dir: {}\ngame_version_id: {}",
-               inst.id, inst.name, inst.mods_dir, inst.data_dir, inst.game_version_id
+               inst.id,
+               inst.name,
+               inst.mods_dir.display(),
+               inst.data_dir.display(),
+               inst.game_version_id
             );
          } else {
             println!("No active instance.");

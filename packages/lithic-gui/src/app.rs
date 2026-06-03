@@ -189,7 +189,12 @@ fn clear_after(msg: Message) -> Task<Message> {
 
 impl App {
    pub fn new() -> (Self, Task<Message>) {
-      let _ = lithic_core::config::manager::init_config();
+      // Config init failure is recoverable: we'll run with in-memory defaults
+      // until the user fixes the underlying issue. Log it so the cause shows
+      // up under `RUST_LOG`, rather than swallowing it silently.
+      if let Err(e) = lithic_core::config::manager::init_config() {
+         tracing::error!("failed to initialise config (continuing with defaults): {e}");
+      }
       let loc = Arc::new(Localizer::new_english());
       let nav_labels = [
          loc.get(ids::NAV_BROWSE).into_owned(),
@@ -953,7 +958,7 @@ impl App {
          Message::ActiveInstanceLoaded(Ok(active)) => {
             if let Some(active) = active {
                self.instances.active_instance_id = active.id.clone();
-               self.mod_dir = PathBuf::from(active.mods_dir);
+               self.mod_dir = active.mods_dir;
             } else {
                self.instances.active_instance_id.clear();
             }
@@ -1094,8 +1099,8 @@ impl App {
             if let Some(inst) = self.instances.instances.iter().find(|i| i.id == id) {
                self.instances.form_id = inst.id.clone();
                self.instances.form_name = inst.name.clone();
-               self.instances.form_data_dir = inst.data_dir.clone();
-               self.instances.form_mods_dir = inst.mods_dir.clone();
+               self.instances.form_data_dir = inst.data_dir.to_string_lossy().to_string();
+               self.instances.form_mods_dir = inst.mods_dir.to_string_lossy().to_string();
                self.instances.form_game_version_id = inst.game_version_id.clone();
                self.instances.form_start_params = inst.start_params.clone();
                self.instances.form_env_vars = inst.env_vars.clone();

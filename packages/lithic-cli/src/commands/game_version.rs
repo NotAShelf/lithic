@@ -1,6 +1,7 @@
 use crate::commands::arg_structs::game_version_args::{
    GameVersionCommands, GameVersionSourceArg, GameVersionSubCommands,
 };
+use lithic_core::api::client::VSOSType;
 use lithic_core::instance::{GameVersionInstall, GameVersionInstallOptions, GameVersionSource};
 use std::path::PathBuf;
 
@@ -11,12 +12,24 @@ fn map_source(source: GameVersionSourceArg) -> GameVersionSource {
    }
 }
 
+/// Dispatch game-version subcommands.
+///
+/// # Errors
+///
+/// Returns an error if loading, saving, deleting, or installing game-version
+/// entries fails.
 pub async fn parse_game_version_commands(commands: &GameVersionCommands) -> Result<(), String> {
    match &commands.subcommand {
       GameVersionSubCommands::List => {
          let versions = lithic_core::instance::list_game_versions().await?;
          for v in versions {
-            println!("{}\t{}\t{}\t{:?}", v.id, v.version, v.path, v.source);
+            println!(
+               "{}\t{}\t{}\t{:?}",
+               v.id,
+               v.version,
+               v.path.display(),
+               v.source
+            );
          }
          Ok(())
       }
@@ -24,9 +37,9 @@ pub async fn parse_game_version_commands(commands: &GameVersionCommands) -> Resu
          lithic_core::instance::add_or_update_game_version(GameVersionInstall {
             id: args.id.clone(),
             version: args.version.clone(),
-            path: args.path.clone(),
+            path: PathBuf::from(&args.path),
             source: map_source(args.source),
-            os: std::env::consts::OS.to_string(),
+            os: VSOSType::host(),
          })
          .await
       }
@@ -42,7 +55,9 @@ pub async fn parse_game_version_commands(commands: &GameVersionCommands) -> Resu
          .await?;
          println!(
             "installed {}\t{}\t{}",
-            installed.id, installed.version, installed.path
+            installed.id,
+            installed.version,
+            installed.path.display()
          );
          Ok(())
       }

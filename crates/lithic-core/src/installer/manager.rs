@@ -104,7 +104,7 @@ pub async fn install_manager(
    pb.set_style(
         ProgressStyle::default_bar()
             .template("{spinner:.green} [{elapsed_precise:.cyan}] [{bar:.blue/grey:40}] {pos:.green}/{len:.cyan} {msg:.yellow}")
-            .unwrap()
+            .expect("static indicatif template invariant: literal is well-formed")
             .progress_chars("█▒░")
     );
    pb.set_message("Downloading...");
@@ -254,7 +254,7 @@ pub async fn install_manager(
    }
 
    // TODO: Figure out why sometimes items show up twice, even if they are installed once
-   mods_processed.sort_by(|a, b| a.mod_name.to_lowercase().cmp(&b.mod_name.to_lowercase()));
+   mods_processed.sort_by_key(|m| m.mod_name.to_lowercase());
    mods_processed.dedup_by(|a, b| a.mod_id == b.mod_id);
 
    pb.finish_with_message("Finished installing mods");

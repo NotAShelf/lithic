@@ -85,9 +85,9 @@ where
       .entries()
       .iter()
       .position(|e| {
-         e.filename()
-            .as_str()
-            .map_or(false, |s| s.eq_ignore_ascii_case(inner_file))
+          e.filename()
+             .as_str()
+             .is_ok_and(|s| s.eq_ignore_ascii_case(inner_file))
       })
       .ok_or_else(|| LithicError::ZipError {
          context: format!("Failed to find {} in {:?}", inner_file, entry.file_name()),
@@ -341,16 +341,110 @@ pub async fn write_json_file(
    config_dir: impl AsRef<Path>,
 ) -> Result<(), LithicError> {
    let (file_path, config_dir) = (file_path.as_ref(), config_dir.as_ref());
-   let mut open_file = File::create(file_path).await.map_err(|e| LithicError::IoError {
-      context: format!(
-         "Error writing sync mod search file to config dir: {}",
-         config_dir.to_string_lossy()
-      ),
+   write_atomic_async(file_path, json.as_bytes())
+      .await
+      .map_err(|e| match e {
+         LithicError::IoError { source, .. } => LithicError::IoError {
+            context: format!(
+               "Error writing sync mod search file to config dir: {}",
+               config_dir.to_string_lossy()
+            ),
+            source,
+         },
+         other => other,
+      })
+}
+
+/// Atomically write `bytes` to `path` by writing to a sibling temp file and
+/// renaming over the target. A crash mid-write leaves the prior contents intact
+/// rather than a truncated/corrupt file. Synchronous variant for code paths
+/// that are not in an async context (config saves at startup).
+pub fn write_atomic_sync(path: impl AsRef<Path>, bytes: &[u8]) -> Result<(), LithicError> {
+   use std::io::Write;
+   let path = path.as_ref();
+   let parent = path.parent().unwrap_or_else(|| Path::new("."));
+   std::fs::create_dir_all(parent).map_err(|e| LithicError::IoError {
+      context: format!("creating parent directory for {}", path.display()),
       source: e,
    })?;
-   AsyncWriteExt::write_all(&mut open_file, json.as_bytes()).await?;
+   let tmp = tempfile_path(path);
+   {
+      let mut f = std::fs::File::create(&tmp).map_err(|e| LithicError::IoError {
+         context: format!("creating temp file {}", tmp.display()),
+         source: e,
+      })?;
+      f.write_all(bytes).map_err(|e| LithicError::IoError {
+         context: format!("writing temp file {}", tmp.display()),
+         source: e,
+      })?;
+      f.sync_all().map_err(|e| LithicError::IoError {
+         context: format!("fsync temp file {}", tmp.display()),
+         source: e,
+      })?;
+   }
+   std::fs::rename(&tmp, path).map_err(|e| LithicError::IoError {
+      context: format!("rename {} -> {}", tmp.display(), path.display()),
+      source: e,
+   })
+}
 
-   Ok(())
+/// Async variant of [`write_atomic_sync`].
+pub async fn write_atomic_async(path: impl AsRef<Path>, bytes: &[u8]) -> Result<(), LithicError> {
+   let path = path.as_ref();
+   let parent = path.parent().unwrap_or_else(|| Path::new("."));
+   tokio::fs::create_dir_all(parent).await.map_err(|e| LithicError::IoError {
+      context: format!("creating parent directory for {}", path.display()),
+      source: e,
+   })?;
+   let tmp = tempfile_path(path);
+   {
+      let mut f = File::create(&tmp).await.map_err(|e| LithicError::IoError {
+         context: format!("creating temp file {}", tmp.display()),
+         source: e,
+      })?;
+      AsyncWriteExt::write_all(&mut f, bytes).await.map_err(|e| LithicError::IoError {
+         context: format!("writing temp file {}", tmp.display()),
+         source: e,
+      })?;
+      f.sync_all().await.map_err(|e| LithicError::IoError {
+         context: format!("fsync temp file {}", tmp.display()),
+         source: e,
+      })?;
+   }
+   tokio::fs::rename(&tmp, path).await.map_err(|e| LithicError::IoError {
+      context: format!("rename {} -> {}", tmp.display(), path.display()),
+      source: e,
+   })
+}
+
+fn tempfile_path(target: &Path) -> PathBuf {
+   let pid = std::process::id();
+   let nanos = std::time::SystemTime::now()
+      .duration_since(std::time::UNIX_EPOCH)
+      .map(|d| d.as_nanos())
+      .unwrap_or(0);
+   let mut tmp = target.as_os_str().to_owned();
+   tmp.push(format!(".tmp.{pid}.{nanos}"));
+   PathBuf::from(tmp)
+}
+
+#[cfg(test)]
+mod atomic_write_tests {
+   use super::write_atomic_sync;
+
+   #[test]
+   fn atomic_write_replaces_existing_contents() {
+      let path = std::env::temp_dir().join(format!(
+         "lithic-atomic-write-test-{}",
+         std::process::id()
+      ));
+      std::fs::write(&path, b"old").unwrap();
+
+      write_atomic_sync(&path, b"new").unwrap();
+
+      assert_eq!(std::fs::read(&path).unwrap(), b"new");
+      std::fs::remove_file(path).unwrap();
+   }
 }
 
 pub async fn sorted_game_versions() -> Result<Vec<String>, LithicError> {
@@ -441,10 +535,10 @@ pub async fn backup_older_files(processed_install: &[Installed]) -> Result<(), L
    }
 
    for m in processed_install {
-      if let Some(old_path) = &m.old_file_path {
-         if let Some(old_file_name) = old_path.file_name() {
-            tokio::fs::copy(old_path, backup_dir.join(old_file_name)).await?;
-         }
+      if let Some(old_path) = &m.old_file_path
+         && let Some(old_file_name) = old_path.file_name()
+      {
+         tokio::fs::copy(old_path, backup_dir.join(old_file_name)).await?;
       }
    }
 

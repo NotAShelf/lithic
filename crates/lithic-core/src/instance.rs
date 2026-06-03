@@ -10,36 +10,33 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum GameVersionSource {
+   #[default]
    Manual,
    LithicDownload,
-}
-
-impl Default for GameVersionSource {
-   fn default() -> Self {
-      Self::Manual
-   }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GameVersionInstall {
    pub id: String,
    pub version: String,
-   pub path: String,
+   pub path: PathBuf,
    #[serde(default)]
    pub source: GameVersionSource,
+   /// The OS this install targets. `None` keeps the field optional on disk so
+   /// older configs (where `os` was missing) keep loading.
    #[serde(default)]
-   pub os: String,
+   pub os: Option<VSOSType>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct InstanceConfig {
    pub id: String,
    pub name: String,
-   pub data_dir: String,
-   pub mods_dir: String,
+   pub data_dir: PathBuf,
+   pub mods_dir: PathBuf,
    pub game_version_id: String,
    #[serde(default)]
    pub enabled_modpacks: Vec<String>,
@@ -74,10 +71,13 @@ pub enum GameVersionInstallEvent {
 }
 
 fn now_ms() -> i64 {
+   // u128 -> i64: saturate on overflow instead of silently truncating. Current
+   // timestamps comfortably fit; this is defensive against clock skew far in
+   // the future and against systems whose clock is set before UNIX_EPOCH.
    SystemTime::now()
       .duration_since(UNIX_EPOCH)
-      .map(|d| d.as_millis() as i64)
-      .unwrap_or_default()
+      .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+      .unwrap_or(0)
 }
 
 pub fn find_executable(version_path: &Path) -> Option<(String, Vec<String>)> {
@@ -146,7 +146,7 @@ pub async fn ensure_instances_migrated() -> Result<(), String> {
    let default = InstanceConfig {
       id: "default".to_string(),
       name: "Default".to_string(),
-      data_dir: String::new(),
+      data_dir: PathBuf::new(),
       mods_dir: config.mod_dir.clone(),
       game_version_id: String::new(),
       enabled_modpacks: config.modpacks.enabled.clone(),
@@ -172,7 +172,7 @@ pub async fn add_or_update_instance(instance: InstanceConfig) -> Result<(), Stri
    if instance.id.trim().is_empty() {
       return Err("Instance id cannot be empty".to_string());
    }
-   if instance.mods_dir.trim().is_empty() {
+   if instance.mods_dir.as_os_str().is_empty() {
       return Err("Instance mods dir cannot be empty".to_string());
    }
    if instance.name.trim().is_empty() {
@@ -209,7 +209,7 @@ pub async fn set_active_instance(id: &str) -> Result<(), String> {
    }
    config.active_instance_id = Some(id.to_string());
    if let Some(active) = config.instances.iter().find(|x| x.id == id).cloned() {
-      config.mod_dir = active.mods_dir;
+      config.mod_dir = active.mods_dir.clone();
       config.modpacks.enabled = active.enabled_modpacks;
    }
    config.save(None).map_err(|e| e.to_string())
@@ -226,10 +226,10 @@ pub async fn get_active_instance() -> Result<Option<InstanceConfig>, String> {
 
 pub async fn resolve_active_mod_dir() -> Result<PathBuf, String> {
    if let Some(instance) = get_active_instance().await? {
-      return Ok(PathBuf::from(instance.mods_dir));
+      return Ok(instance.mods_dir);
    }
    let config = get_config().read().await;
-   Ok(PathBuf::from(config.mod_dir.clone()))
+   Ok(config.mod_dir.clone())
 }
 
 pub async fn list_game_versions() -> Result<Vec<GameVersionInstall>, String> {
@@ -241,7 +241,7 @@ pub async fn add_or_update_game_version(game_version: GameVersionInstall) -> Res
    let mut config = get_config().write().await;
    if game_version.id.trim().is_empty()
       || game_version.version.trim().is_empty()
-      || game_version.path.trim().is_empty()
+      || game_version.path.as_os_str().is_empty()
    {
       return Err("Game version id, version, and path are required".to_string());
    }
@@ -364,7 +364,7 @@ where
    } else {
       opts.id
    };
-   let archive_path = root.join(filename.to_string());
+   let archive_path = root.join(&filename);
    progress(GameVersionInstallEvent::Log(format!(
       "Saving artifact to {}",
       archive_path.display()
@@ -413,14 +413,15 @@ where
    let install = GameVersionInstall {
       id: version_id,
       version,
-      path: registered_path.to_string_lossy().to_string(),
+      path: registered_path,
       source: GameVersionSource::LithicDownload,
-      os: opts.os_type.to_string(),
+      os: Some(opts.os_type.clone()),
    };
    add_or_update_game_version(install.clone()).await?;
    progress(GameVersionInstallEvent::Log(format!(
       "Registered {} at {}",
-      install.id, install.path
+      install.id,
+      install.path.display()
    )));
    Ok(install)
 }
@@ -439,7 +440,7 @@ pub async fn launch_instance(instance_id: Option<String>) -> Result<(), String> 
       let Some(instance) = config.instances.iter().find(|x| x.id == active_id).cloned() else {
          return Err(format!("Instance not found: {active_id}"));
       };
-      if instance.data_dir.trim().is_empty() {
+      if instance.data_dir.as_os_str().is_empty() {
          return Err("Instance data_dir is empty".to_string());
       }
       let Some(version) = config
@@ -453,12 +454,11 @@ pub async fn launch_instance(instance_id: Option<String>) -> Result<(), String> 
       (active_id, instance, version)
    };
 
-   let version_path = PathBuf::from(version.path);
-   let Some((command, mut args)) = find_executable(&version_path) else {
+   let Some((command, mut args)) = find_executable(&version.path) else {
       return Err("Unable to locate Vintage Story executable in selected version path".to_string());
    };
 
-   args.push(format!("--dataPath={}", instance.data_dir));
+   args.push(format!("--dataPath={}", instance.data_dir.display()));
    args.extend(instance.start_params.split_whitespace().map(ToString::to_string));
 
    let start = now_ms();

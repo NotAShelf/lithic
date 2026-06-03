@@ -3,16 +3,13 @@ use crate::api::structs::{GameVersions, Mod, Mods};
 use crate::consts::FILE_MODINFO_JSON;
 use crate::errors::LithicError;
 use clap::ValueEnum;
-use futures::future::join_all;
+use futures::{StreamExt, stream};
 use indicatif::{ProgressBar, ProgressStyle};
 use reqwest::Response;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
-use std::fmt::Write;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Semaphore;
-use tokio::task::JoinHandle;
 use tracing::{debug, error, info};
 use yansi::Paint;
 
@@ -27,6 +24,11 @@ pub const LITHIC_USER_AGENT: &str = concat!(
    env!("CARGO_PKG_REPOSITORY"),
    ")"
 );
+
+/// Cap on concurrent per-mod fetches when populating the mod database. The
+/// Vintage Story API tolerates fan-out but starts rate-limiting beyond this;
+/// `fetch_mods_parallel` respects this bound.
+pub const MAX_CONCURRENT_MOD_FETCHES: usize = 5;
 
 #[derive(Debug, Clone)]
 pub struct ApiClient {
@@ -52,9 +54,11 @@ pub enum VSExecutabletype {
 }
 
 #[allow(clippy::upper_case_acronyms)]
-#[derive(Clone, ValueEnum, Debug)]
+#[derive(Clone, ValueEnum, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum VSOSType {
    Linux,
+   #[serde(alias = "macos")]
    OSX,
    Windows,
 }
@@ -69,6 +73,19 @@ impl Display for VSOSType {
    }
 }
 
+impl VSOSType {
+   /// Best-effort detection of the host OS. Returns `None` on platforms we
+   /// don't support (e.g. BSDs); callers decide whether that's fatal.
+   pub fn host() -> Option<Self> {
+      match std::env::consts::OS {
+         "linux" => Some(Self::Linux),
+         "macos" => Some(Self::OSX),
+         "windows" => Some(Self::Windows),
+         _ => None,
+      }
+   }
+}
+
 #[derive(Debug, Clone, ValueEnum)]
 pub enum VSWinInstallerType {
    Install,
@@ -76,19 +93,28 @@ pub enum VSWinInstallerType {
 }
 
 impl ApiClient {
+   /// Construct a client with Lithic's default `reqwest` configuration
+   /// (20s request timeout, Lithic user-agent).
    pub fn new() -> Self {
       Self {
+         // `reqwest::Client::builder().build()` only fails if TLS backend
+         // initialisation fails, which is a process-wide configuration error
+         // — treat it as a programmer-visible invariant rather than a
+         // recoverable runtime case.
          agent: Arc::new(
             reqwest::Client::builder()
                .timeout(Duration::from_secs(20))
                .user_agent(LITHIC_USER_AGENT)
                .build()
-               .expect("Failed to build HTTP client"),
+               .expect("reqwest::Client builder invariant: default TLS backend available"),
          ),
       }
    }
 
-   pub fn _with_agent(agent: Arc<reqwest::Client>) -> Self {
+   /// Inject a pre-built `reqwest::Client`. Intended for tests / integration
+   /// scenarios that want to plug in a custom transport (mock server, fixed
+   /// proxy, alternate timeout, ...).
+   pub fn with_agent(agent: Arc<reqwest::Client>) -> Self {
       Self { agent }
    }
 
@@ -112,24 +138,18 @@ impl ApiClient {
          reason: reason.map(str::to_string),
       })
    }
-   fn cdn_uri_stable(endpoint: &str) -> String {
-      format!("{VS_CDN_STABLE_RELEASE}/{endpoint}")
-   }
-   fn cdn_uri_unstable(endpoint: &str) -> String {
-      format!("{VS_CDN_UNSTABLE_RELEASE}/{endpoint}")
-   }
 
    pub async fn fetch_all_mods(&self) -> Result<Mods, LithicError> {
-      let response =
-         self
-            .agent
-            .get(Self::api_uri("mods"))
-            .send()
-            .await
-            .map_err(|e| LithicError::ApiError {
-               context: "fetch_all_mods (get): ".to_string(),
-               source: e,
-            })?;
+      let response = self
+         .agent
+         .get(Self::api_uri("mods"))
+         .send()
+         .await
+         .and_then(Response::error_for_status)
+         .map_err(|e| LithicError::ApiError {
+            context: "fetch_all_mods (get): ".to_string(),
+            source: e,
+         })?;
 
       let mods = response.json::<Mods>().await.map_err(|e| LithicError::ApiError {
          context: "fetch_all_mods (json): ".to_string(),
@@ -146,6 +166,7 @@ impl ApiClient {
          .get(Self::api_uri(&format!("mods?gameversion={version}")))
          .send()
          .await
+         .and_then(Response::error_for_status)
          .map_err(|e| LithicError::ApiError {
             context: format!("fetch_mods_with_gameversion ({version}): "),
             source: e,
@@ -175,6 +196,7 @@ impl ApiClient {
          .get(Self::api_uri(&format!("mod/{mod_id}")))
          .send()
          .await
+         .and_then(Response::error_for_status)
          .map_err(|e| LithicError::ApiError {
             context: format!("fetch_mod (get) [{mod_id}]",),
             source: e,
@@ -182,10 +204,6 @@ impl ApiClient {
 
       let headers = response.headers().clone();
       let status_code = response.status();
-      // let res_text = response.text().map_err(|e| LithicError::ApiError {
-      //     context: format!("fetch_mod (json) [{mod_id}]: failed to get response text"),
-      //     source: e,
-      // })?;
 
       info!(
          "fetch_mod ({}): Status Code: {}",
@@ -229,50 +247,37 @@ impl ApiClient {
       pb.set_style(
             ProgressStyle::default_bar()
                 .template("{spinner:.green} [{elapsed_precise:.cyan}] [{bar:.cyan/grey:40}] {pos:.green}/{len:.cyan} {msg:.yellow}")
-                .unwrap()
+                .expect("static indicatif template invariant: literal is well-formed")
                 .progress_chars("█▒░")
         );
       pb.set_message("Fetching mods...");
 
-      // Create a vector to hold all our task handles
-      let mut tasks: Vec<JoinHandle<Option<(ModID, Mod)>>> = Vec::with_capacity(valid_ids.len());
-      let semaphore = Arc::new(Semaphore::new(5));
-
-      // Spawn a task for each mod
-      for mod_id in valid_ids {
-         info!("ModID: {}", mod_id);
-
-         let client = self.clone();
-         let pb_clone = pb.clone();
-         let semaphore = semaphore.clone();
-         // Spawn an async task for this mod
-         let task = tokio::spawn(async move {
-            let _permit = semaphore.acquire_owned().await.ok()?;
-            match client.fetch_mod(&mod_id).await {
-               Ok(the_mod) => {
-                  pb_clone.set_message(mod_id.to_string());
-                  pb_clone.inc(1);
-                  Some((mod_id, the_mod))
-               }
-               Err(e) => {
-                  error!("{mod_id} {e}");
-                  pb_clone.set_message(format!("Failed: {}", mod_id.to_string().red()));
-                  pb_clone.inc(1);
-                  None
+      let results = stream::iter(valid_ids)
+         .map(|mod_id| {
+            let client = self.clone();
+            let pb = pb.clone();
+            async move {
+               info!("ModID: {mod_id}");
+               let result = client.fetch_mod(&mod_id).await.map(|the_mod| (mod_id.clone(), the_mod));
+               match result {
+                  Ok((mod_id, mod_info)) => {
+                     pb.set_message(mod_id.to_string());
+                     pb.inc(1);
+                     Some((mod_id, mod_info))
+                  }
+                  Err(e) => {
+                     error!("{mod_id} {e}");
+                     pb.set_message(format!("Failed: {}", mod_id.to_string().red()));
+                     pb.inc(1);
+                     None
+                  }
                }
             }
-         });
-
-         tasks.push(task);
-      }
-
-      let results_vec = join_all(tasks).await;
-      // Wait for all tasks to complete and collect results
-      let mut results = HashMap::new();
-      for (mod_id, mod_info) in results_vec.into_iter().flatten().flatten() {
-         // Handle any JoinError from the task itself
-         results.insert(mod_id, mod_info);
-      }
+         })
+         .buffer_unordered(MAX_CONCURRENT_MOD_FETCHES)
+         .filter_map(futures::future::ready)
+         .collect::<HashMap<_, _>>()
+         .await;
 
       pb.finish_with_message("Fetch Complete");
       Ok(results)
@@ -284,6 +289,7 @@ impl ApiClient {
          .get(Self::api_uri("gameversions"))
          .send()
          .await
+         .and_then(Response::error_for_status)
          .map_err(|e| LithicError::ApiError {
             context: "Failed during gameversions api call".to_string(),
             source: e,
@@ -314,12 +320,18 @@ impl ApiClient {
          .get(mod_uri)
          .send()
          .await
+         .and_then(Response::error_for_status)
          .map_err(|e| LithicError::ApiError {
             context: format!("get_request: {mod_uri}"),
             source: e,
          })
    }
 
+   /// Build the CDN URL and target filename for a Vintage Story release.
+   ///
+   /// The official CDN names files according to the OS, executable kind, and
+   /// (on Windows) installer kind: e.g. `vs_client_linux-x64_1.20.0.tar.gz`,
+   /// `vs_install_win-x64_1.20.0.exe`, `vs_server_win-x64_1.20.0.zip`.
    pub fn download_uri(
       &self,
       os_type: &VSOSType,
@@ -328,47 +340,13 @@ impl ApiClient {
       game_version: &str,
       win_installer: Option<&VSWinInstallerType>,
    ) -> Result<(UrlString, FileName), LithicError> {
-      let mut download_str = String::from("vs_");
-
-      let etype = match exe_type {
-         VSExecutabletype::Client => "client",
-         VSExecutabletype::Server => "server",
+      let filename = build_release_filename(os_type, exe_type, win_installer, game_version);
+      let cdn_base = match vsmirror_type {
+         VSMirrorType::Stable => VS_CDN_STABLE_RELEASE,
+         VSMirrorType::Unstable => VS_CDN_UNSTABLE_RELEASE,
       };
-
-      if matches!(os_type, VSOSType::Windows) {
-         if etype == "server" {
-            download_str += "server_win";
-         } else {
-            download_str += match win_installer {
-               Some(VSWinInstallerType::Install) | None => "install_",
-               Some(VSWinInstallerType::Update) => "update_",
-            };
-            download_str += "win";
-         }
-      } else {
-         write!(&mut download_str, "{}_{}", etype, os_type.to_string().as_str())
-            .map_err(|e| LithicError::SimpleError(e.to_string()))?;
-      }
-
-      // use std::fmt::write to avoid extra allocation with format!
-      write!(&mut download_str, "-x64_{game_version}")
-         .map_err(|e| LithicError::SimpleError(e.to_string()))?;
-
-      download_str += if matches!(os_type, VSOSType::OSX) || matches!(os_type, VSOSType::Linux) {
-         ".tar.gz"
-      } else if matches!(exe_type, VSExecutabletype::Server) {
-         ".zip"
-      } else {
-         ".exe"
-      };
-
-      let cdn = if matches!(vsmirror_type, VSMirrorType::Stable) {
-         Self::cdn_uri_stable(&download_str)
-      } else {
-         Self::cdn_uri_unstable(&download_str)
-      };
-
-      Ok((cdn.into(), download_str.into()))
+      let url = format!("{cdn_base}/{filename}");
+      Ok((url.into(), filename.into()))
    }
 
    pub async fn head(&self, uri: &str) -> Result<Response, LithicError> {
@@ -377,9 +355,102 @@ impl ApiClient {
          .head(uri)
          .send()
          .await
+         .and_then(Response::error_for_status)
          .map_err(|e| LithicError::ApiError {
             context: format!("Failed calling agent.head({uri})"),
             source: e,
          })
+   }
+}
+
+/// Construct the CDN basename for a Vintage Story release artifact.
+fn build_release_filename(
+   os: &VSOSType,
+   exe: &VSExecutabletype,
+   win_installer: Option<&VSWinInstallerType>,
+   game_version: &str,
+) -> String {
+   let prefix = match (os, exe) {
+      (VSOSType::Windows, VSExecutabletype::Server) => "vs_server_win".to_string(),
+      (VSOSType::Windows, VSExecutabletype::Client) => {
+         let installer = match win_installer.unwrap_or(&VSWinInstallerType::Install) {
+            VSWinInstallerType::Install => "install",
+            VSWinInstallerType::Update => "update",
+         };
+         format!("vs_{installer}_win")
+      }
+      (os, exe) => {
+         let etype = match exe {
+            VSExecutabletype::Client => "client",
+            VSExecutabletype::Server => "server",
+         };
+         format!("vs_{etype}_{os}")
+      }
+   };
+   let extension = match (os, exe) {
+      (VSOSType::Linux | VSOSType::OSX, _) => "tar.gz",
+      (VSOSType::Windows, VSExecutabletype::Server) => "zip",
+      (VSOSType::Windows, VSExecutabletype::Client) => "exe",
+   };
+   format!("{prefix}-x64_{game_version}.{extension}")
+}
+
+#[cfg(test)]
+mod tests {
+   use super::*;
+
+   #[test]
+   fn linux_client_filename() {
+      let name = build_release_filename(
+         &VSOSType::Linux,
+         &VSExecutabletype::Client,
+         None,
+         "1.20.0",
+      );
+      assert_eq!(name, "vs_client_linux-x64_1.20.0.tar.gz");
+   }
+
+   #[test]
+   fn windows_client_installer() {
+      let name = build_release_filename(
+         &VSOSType::Windows,
+         &VSExecutabletype::Client,
+         Some(&VSWinInstallerType::Install),
+         "1.20.0",
+      );
+      assert_eq!(name, "vs_install_win-x64_1.20.0.exe");
+   }
+
+   #[test]
+   fn windows_client_update() {
+      let name = build_release_filename(
+         &VSOSType::Windows,
+         &VSExecutabletype::Client,
+         Some(&VSWinInstallerType::Update),
+         "1.20.0",
+      );
+      assert_eq!(name, "vs_update_win-x64_1.20.0.exe");
+   }
+
+   #[test]
+   fn windows_server_archive() {
+      let name = build_release_filename(
+         &VSOSType::Windows,
+         &VSExecutabletype::Server,
+         None,
+         "1.20.0",
+      );
+      assert_eq!(name, "vs_server_win-x64_1.20.0.zip");
+   }
+
+   #[test]
+   fn osx_client_tarball() {
+      let name = build_release_filename(
+         &VSOSType::OSX,
+         &VSExecutabletype::Client,
+         None,
+         "1.20.0",
+      );
+      assert_eq!(name, "vs_client_osx-x64_1.20.0.tar.gz");
    }
 }

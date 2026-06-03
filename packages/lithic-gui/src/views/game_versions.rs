@@ -191,7 +191,7 @@ pub fn view<'a>(state: &'a GameVersionsView, loc: &'a Localizer) -> Element<'a, 
             row![
                column![
                   text(format!("{} ({})", gv.version, gv.id)).size(14),
-                  text(gv.path.as_str()).size(12),
+                  text(gv.path.display().to_string()).size(12),
                ]
                .spacing(4)
                .width(Fill),

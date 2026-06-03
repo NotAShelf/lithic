@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 
-use futures::future::join_all;
+use futures::future::try_join_all;
 use lithic_core::api::client::ApiClient;
 use lithic_core::api::client::{VSExecutabletype, VSOSType, VSWinInstallerType};
 use lithic_core::api::structs::{ModApi, ModInfo, ModsSearchFile};
@@ -12,7 +12,7 @@ use lithic_core::consts::{FILE_GAME_VERSION_SYNC, FILE_LITHIC_SYNC, FILE_MOD_SEA
 use lithic_core::installer::manager::{Install, install_manager};
 use lithic_core::instance::{GameVersionInstall, GameVersionInstallEvent, InstanceConfig};
 use lithic_core::search::SearchQuery;
-use lithic_core::sync::structs::{GameVersionSync, LithicSyncJson, ModSyncInfo};
+use lithic_core::sync::structs::{GameVersionSync, LithicSyncJson, ModSyncInfo, remove_mod_and_sync};
 use lithic_core::utils::{
    extract_all_mods_metadata, get_current_time, parse_json_file, prettify, write_json_file,
 };
@@ -182,19 +182,7 @@ pub async fn update_all(mod_dir: PathBuf) -> Result<(), String> {
 }
 
 pub async fn delete_mod(mod_dir: PathBuf, file_name: String) -> Result<String, String> {
-   let file_path = mod_dir.join(&file_name);
-   if file_path.exists() {
-      tokio::fs::remove_file(&file_path).await.map_err(err)?;
-   }
-
-   let sync_file = mod_dir.join(FILE_LITHIC_SYNC);
-   if sync_file.exists() {
-      if let Ok(mut data) = parse_json_file::<LithicSyncJson>(&sync_file).await {
-         data.lithic_sync.retain(|_, info| info.file_name != file_name);
-         let _ = data.save(&sync_file).await;
-      }
-   }
-
+   remove_mod_and_sync(&mod_dir, &file_name).await.map_err(err)?;
    Ok(file_name)
 }
 
@@ -321,11 +309,11 @@ pub async fn install_mod_to_active_instance(mod_id: String) -> Result<String, St
    let instance = lithic_core::instance::get_active_instance()
       .await?
       .ok_or_else(|| loc_msg("ops-no-active-instance"))?;
-   if instance.mods_dir.trim().is_empty() {
+   if instance.mods_dir.as_os_str().is_empty() {
       return Err(loc_msg("ops-active-instance-no-mods-dir"));
    }
    tokio::fs::create_dir_all(&instance.mods_dir).await.map_err(err)?;
-   install_mod(PathBuf::from(instance.mods_dir), mod_id).await
+   install_mod(instance.mods_dir, mod_id).await
 }
 
 pub async fn load_favorites() -> Result<HashSet<String>, String> {
@@ -340,7 +328,9 @@ pub async fn load_favorites() -> Result<HashSet<String>, String> {
 pub async fn save_favorites(favorites: HashSet<String>) -> Result<(), String> {
    let path = Config::get_path().join(FAVORITES_FILE);
    let data = serde_json::to_string(&favorites).map_err(err)?;
-   tokio::fs::write(&path, data).await.map_err(err)
+   lithic_core::utils::write_atomic_async(&path, data.as_bytes())
+      .await
+      .map_err(err)
 }
 
 pub async fn export_favorites(favorites: HashSet<String>) -> Result<String, String> {
@@ -348,7 +338,9 @@ pub async fn export_favorites(favorites: HashSet<String>) -> Result<String, Stri
    let mut ids: Vec<&String> = favorites.iter().collect();
    ids.sort();
    let content = ids.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n");
-   tokio::fs::write(&path, content).await.map_err(err)?;
+   lithic_core::utils::write_atomic_async(&path, content.as_bytes())
+      .await
+      .map_err(err)?;
    Ok(path.display().to_string())
 }
 
@@ -390,7 +382,7 @@ pub async fn create_pack(
       config.modpacks.modpack_dir.clone()
    };
 
-   if modpack_dir.is_empty() {
+   if modpack_dir.as_os_str().is_empty() {
       return Err(loc_msg("ops-modpack-dir-not-configured"));
    }
 
@@ -401,7 +393,7 @@ pub async fn create_pack(
       .map(|(id, info)| (id, info.installed_version.to_string()))
       .collect();
 
-   let save_path = std::path::Path::new(&modpack_dir).join("mypacks");
+   let save_path = modpack_dir.join("mypacks");
    tokio::fs::create_dir_all(&save_path).await.map_err(err)?;
 
    let pack_info = ModInfo {
@@ -461,7 +453,15 @@ pub async fn load_game_versions() -> Result<Vec<String>, String> {
          last_sync: get_current_time(),
       };
       let json = prettify(&gvs, "game versions").map_err(err)?;
-      let _ = write_json_file(&path, json, &Config::get_path()).await;
+      // Cache write failure is non-fatal (we still have `sorted` in memory),
+      // but it must not silently masquerade as success: a stale cache will
+      // mislead future loads. Log so it surfaces in `--verbose` runs.
+      if let Err(e) = write_json_file(&path, json, &Config::get_path()).await {
+         tracing::warn!(
+            "failed to persist game-version cache to {}: {e}",
+            path.display()
+         );
+      }
       sorted
    };
 
@@ -498,16 +498,14 @@ pub async fn fetch_versioned_browse(
             async move { client.fetch_mods_with_gameversion(&v).await }
          });
 
-         let results = join_all(fetches).await;
+         let results = try_join_all(fetches).await.map_err(err)?;
 
          let mut seen = HashSet::new();
          let mut combined = Vec::new();
-         for result in results {
-            if let Ok(mods_result) = result {
-               for m in mods_result.mods {
-                  if seen.insert(m.mod_id) {
-                     combined.push(m);
-                  }
+         for mods_result in results {
+            for m in mods_result.mods {
+               if seen.insert(m.mod_id) {
+                  combined.push(m);
                }
             }
          }
@@ -519,16 +517,16 @@ pub async fn fetch_versioned_browse(
 pub async fn load_settings() -> Result<SettingsData, String> {
    let config = get_config().read().await;
    Ok(SettingsData {
-      mod_dir: config.mod_dir.clone(),
-      game_download_dir: config.game_download_dir.clone(),
+      mod_dir: config.mod_dir.to_string_lossy().to_string(),
+      game_download_dir: config.game_download_dir.to_string_lossy().to_string(),
       pinned_game_version: config.pinned_game_version.clone(),
       zip_mod_files: config.zip_mod_files,
       backup_mods: config.backup_mods,
-      backup_mods_dir: config.backup_mods_dir.clone(),
+      backup_mods_dir: config.backup_mods_dir.to_string_lossy().to_string(),
       notify_of_unzipped_mods: config.notify_of_unzipped_mods,
       check_for_updates: config.check_for_updates,
       show_execution_time: config.show_execution_time,
-      modpack_dir: config.modpacks.modpack_dir.clone(),
+      modpack_dir: config.modpacks.modpack_dir.to_string_lossy().to_string(),
       theme_mode: config.theme_mode.clone(),
       theme_preset: config.theme_preset.clone(),
       initial_page: config.initial_page.clone(),
@@ -537,16 +535,16 @@ pub async fn load_settings() -> Result<SettingsData, String> {
 
 pub async fn save_settings(s: SettingsData) -> Result<(), String> {
    let mut config = get_config().write().await;
-   config.mod_dir = s.mod_dir;
-   config.game_download_dir = s.game_download_dir;
+   config.mod_dir = PathBuf::from(s.mod_dir);
+   config.game_download_dir = PathBuf::from(s.game_download_dir);
    config.pinned_game_version = s.pinned_game_version;
    config.zip_mod_files = s.zip_mod_files;
    config.backup_mods = s.backup_mods;
-   config.backup_mods_dir = s.backup_mods_dir;
+   config.backup_mods_dir = PathBuf::from(s.backup_mods_dir);
    config.notify_of_unzipped_mods = s.notify_of_unzipped_mods;
    config.check_for_updates = s.check_for_updates;
    config.show_execution_time = s.show_execution_time;
-   config.modpacks.modpack_dir = s.modpack_dir;
+   config.modpacks.modpack_dir = PathBuf::from(s.modpack_dir);
    config.theme_mode = s.theme_mode;
    config.theme_preset = s.theme_preset;
    config.initial_page = s.initial_page;
@@ -580,20 +578,20 @@ pub async fn upsert_instance(form: InstanceFormData) -> Result<(), String> {
    };
    let (default_data_dir, default_mods_dir) = default_instance_paths(id.clone()).await;
    let data_dir = if form.data_dir.trim().is_empty() {
-      default_data_dir
+      PathBuf::from(default_data_dir)
    } else {
-      form.data_dir
+      PathBuf::from(&form.data_dir)
    };
    let mods_dir = if form.mods_dir.trim().is_empty() {
-      default_mods_dir
+      PathBuf::from(default_mods_dir)
    } else {
-      form.mods_dir
+      PathBuf::from(&form.mods_dir)
    };
    tokio::fs::create_dir_all(&data_dir).await.map_err(err)?;
    tokio::fs::create_dir_all(&mods_dir).await.map_err(err)?;
 
    for mod_id in &form.selected_mod_ids {
-      install_mod(PathBuf::from(&mods_dir), mod_id.clone()).await?;
+      install_mod(mods_dir.clone(), mod_id.clone()).await?;
    }
 
    lithic_core::instance::add_or_update_instance(InstanceConfig {
@@ -655,9 +653,9 @@ pub async fn upsert_game_version_install(id: String, version: String, path: Stri
    lithic_core::instance::add_or_update_game_version(GameVersionInstall {
       id,
       version,
-      path,
+      path: PathBuf::from(path),
       source: lithic_core::instance::GameVersionSource::Manual,
-      os: std::env::consts::OS.to_string(),
+      os: VSOSType::host(),
    })
    .await
 }
@@ -722,13 +720,9 @@ pub async fn install_game_version(
                   total,
                } => {
                   p.stage = stage;
-                  p.percent = total.and_then(|t| {
-                     if t == 0 {
-                        None
-                     } else {
-                        Some(((downloaded.saturating_mul(100)) / t).min(100) as u8)
-                     }
-                  });
+                   p.percent = total
+                      .and_then(|t| downloaded.saturating_mul(100).checked_div(t))
+                      .map(|percent| percent.min(100) as u8);
                }
             }
          }
@@ -742,18 +736,23 @@ pub async fn install_game_version(
       p.percent = Some(100);
       p.logs.push(
          locale()
-            .get_with("ops-game-install-log-finished", "path", installed.path.clone())
-            .into_owned(),
+             .get_with(
+                "ops-game-install-log-finished",
+                "path",
+                installed.path.display().to_string(),
+             )
+             .into_owned(),
       );
    }
+   let installed_path = installed.path.display().to_string();
    Ok(locale()
       .get_with2(
          "ops-game-install-result",
          "version",
          installed.version,
          "path",
-         installed.path,
-      )
+          installed_path,
+       )
       .into_owned())
 }
 

@@ -126,17 +126,12 @@ impl Localizer {
    pub fn get_with3<'a>(
       &'a self,
       id: &str,
-      key1: &'a str,
-      value1: impl Into<FluentValue<'a>>,
-      key2: &'a str,
-      value2: impl Into<FluentValue<'a>>,
-      key3: &'a str,
-      value3: impl Into<FluentValue<'a>>,
+      values: [(&'a str, FluentValue<'a>); 3],
    ) -> Cow<'static, str> {
       let mut args = FluentArgs::new();
-      args.set(key1, value1);
-      args.set(key2, value2);
-      args.set(key3, value3);
+      for (key, value) in values {
+         args.set(key, value);
+      }
       self.get_with_args(id, Some(&args))
    }
 }

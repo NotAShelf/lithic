@@ -13,20 +13,29 @@ use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 use tracing::info;
 
+/// Download a Vintage Story archive matching the provided CLI arguments.
+///
+/// # Errors
+///
+/// Returns an error if validation fails, version lookup fails, URL construction
+/// fails, or the archive cannot be written.
 pub async fn download(args: &DownloadArgs) -> Result<(), LithicError> {
    args.validate()?;
 
    let config = get_config().read().await;
-   let mut download_dir = match &args.save_dir.clone() {
-      Some(dir) => dir.clone(),
+   let download_dir = match &args.save_dir {
+      Some(dir) => PathBuf::from(dir),
       None => config.game_download_dir.clone(),
    };
 
-   if !Path::new(&download_dir).exists() {
-      download_dir = String::new();
+   if !download_dir.is_dir() {
+      return Err(LithicError::SimpleError(format!(
+         "download directory does not exist or is not a directory: {}",
+         download_dir.display()
+      )));
    }
 
-   info!("Saving vintage story executable to: {}", &download_dir);
+   info!("Saving vintage story executable to: {}", download_dir.display());
 
    let client = ApiClient::new();
 
@@ -44,14 +53,10 @@ pub async fn download(args: &DownloadArgs) -> Result<(), LithicError> {
    };
 
    let user_version = args.game_version.replace('v', "");
-   let mut found = false;
-   for game_version in &game_versions {
-      if game_version.replace('v', "").eq_ignore_ascii_case(&user_version) {
-         found = true;
-      }
-   }
-
-   if !found {
+   if !game_versions
+      .iter()
+      .any(|game_version| game_version.replace('v', "").eq_ignore_ascii_case(&user_version))
+   {
       notice(
          format!(
             "The version you provided [{user_version}] is not valid. The following are all valid versions.."
@@ -83,11 +88,15 @@ pub async fn download(args: &DownloadArgs) -> Result<(), LithicError> {
 
    info!("{url:?}");
 
-   let save_loc = PathBuf::from(&download_dir).join(&filename);
+   let save_loc = download_dir.join(&filename);
    download_file(&client, &url, &save_loc, "").await?;
 
    notice(
-      format!("Vintage Story has been saved to {download_dir}/{filename}"),
+      format!(
+         "Vintage Story has been saved to {}/{}",
+         download_dir.display(),
+         filename
+      ),
       Some(Color::Green),
       vec![Attribute::Bold],
    );
@@ -95,6 +104,16 @@ pub async fn download(args: &DownloadArgs) -> Result<(), LithicError> {
    Ok(())
 }
 
+/// Download `url` to `save_loc` while showing a progress bar.
+///
+/// # Errors
+///
+/// Returns an error if the request fails, the destination cannot be created, or
+/// any response chunk cannot be written.
+///
+/// # Panics
+///
+/// Panics only if the static progress-bar template literal is invalid.
 pub async fn download_file(
    client: &ApiClient,
    url: &str,
@@ -112,7 +131,8 @@ pub async fn download_file(
    let pb = ProgressBar::new(total_size);
    pb.set_style(
         ProgressStyle::with_template("[{elapsed_precise:.yellow}] [{bar:40.green/grey}] [{bytes:.cyan}/{total_bytes:.green}] [{percent:.magenta}%]")
-            .unwrap().progress_chars("#}•")
+            .expect("static indicatif template invariant: literal is well-formed")
+            .progress_chars("#}•")
     );
 
    let mut res = client.get_request(url).await?;

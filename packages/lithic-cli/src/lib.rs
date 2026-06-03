@@ -65,6 +65,12 @@ use tracing::{debug, error, info, warn};
 use yansi::Paint;
 
 #[allow(clippy::too_many_lines)]
+/// Run the Lithic CLI entrypoint.
+///
+/// # Errors
+///
+/// Returns an error if configuration initialization or a dispatched command
+/// fails.
 pub async fn run() -> Result<()> {
    let cmd = Cli::command();
    let cli = Cli::from_arg_matches(&cmd.get_matches()).unwrap_or_else(|_| {
@@ -117,8 +123,8 @@ pub async fn run() -> Result<()> {
    if mod_dir.as_os_str().is_empty() {
       mod_dir = mod_opts.get_mod_path().await;
    }
-   if cli.mods_dir.is_some() {
-      mod_dir = get_expanded_path(PathBuf::from(cli.mods_dir.clone().unwrap_or(String::new())));
+   if let Some(override_dir) = &cli.mods_dir {
+      mod_dir = get_expanded_path(PathBuf::from(override_dir));
       if !mod_dir.exists() {
          notice(
             "The directory you specified is not valid. Check your input for typos and try again.",
@@ -131,14 +137,17 @@ pub async fn run() -> Result<()> {
 
    if !matches!(&cli.command, Commands::LithicSelf(_)) {
       let config = get_config().read().await;
-      let _ = check_for_update(config.check_for_updates, true).await;
+      // Update check is best-effort: a network blip on launch should not stop
+      // the user from running their actual command. Log so failures are still
+      // visible under `--verbose`.
+      if let Err(e) = check_for_update(config.check_for_updates, true).await {
+         debug!("startup update check failed: {e}");
+      }
    }
 
-   if cli.with_mpk.is_some() {
+   if let Some(mpk_id) = &cli.with_mpk {
       let config = get_config().read().await;
-      mod_dir = Path::new(&config.modpacks.modpack_dir)
-         .join("installed")
-         .join(cli.with_mpk.clone().unwrap_or(String::new()));
+      mod_dir = config.modpacks.modpack_dir.join("installed").join(mpk_id);
       if !mod_dir.exists() {
          notice(
             "The modpack you specified isn't installed. Double check your spelling and try again.",
@@ -256,7 +265,13 @@ pub async fn run() -> Result<()> {
          #[cfg(unix)]
          if args.wait {
             println!("Press enter to exit...");
-            stdin().read_line(&mut String::new()).unwrap();
+            // Pipe closures and other stdin errors should not crash the
+            // process; if we can't read the line, treat it as the user
+            // having moved on.
+            let mut buf = String::new();
+            if let Err(e) = stdin().read_line(&mut buf) {
+               debug!("stdin closed while waiting: {e}");
+            }
          }
       }
       Commands::Config(config_cmd) => {
