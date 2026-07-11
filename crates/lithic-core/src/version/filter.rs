@@ -1,24 +1,22 @@
 use std::collections::HashSet;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum VersionFilter {
+   #[default]
    Any,
    Exact(String),
    AtLeast(String),
 }
 
-impl Default for VersionFilter {
-   fn default() -> Self {
-      VersionFilter::Any
-   }
-}
-
 impl VersionFilter {
-   pub fn label(&self) -> String {
+   /// Render the filter as the user sees it. Returns `None` for `Any` so the
+   /// caller (which has access to a localiser) can produce the appropriate
+   /// translation rather than embedding the English string in core.
+   pub fn label(&self) -> Option<String> {
       match self {
-         VersionFilter::Any => "All versions".to_string(),
-         VersionFilter::Exact(v) => v.clone(),
-         VersionFilter::AtLeast(v) => format!("{v}+"),
+         VersionFilter::Any => None,
+         VersionFilter::Exact(v) => Some(v.clone()),
+         VersionFilter::AtLeast(v) => Some(format!("{v}+")),
       }
    }
 
@@ -60,7 +58,7 @@ pub fn unique_minor_versions(versions: &[String]) -> Vec<String> {
       .filter_map(|v| minor_version(v))
       .filter(|mv| seen.insert(mv.clone()))
       .collect();
-   result.sort_by(|a, b| parse_minor(b).cmp(&parse_minor(a)));
+   result.sort_by_key(|v| std::cmp::Reverse(parse_minor(v)));
    result
 }
 

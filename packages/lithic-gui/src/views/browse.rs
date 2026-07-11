@@ -252,12 +252,9 @@ pub fn view<'a>(state: &'a BrowseView, loc: &'a Localizer) -> Element<'a, Messag
       let msg = if state.show_favorites_only && state.favorites.is_empty() {
          loc.get("browse-no-favorites").into_owned()
       } else if !matches!(state.version_filter, VersionFilter::Any) && state.query.is_empty() {
-         loc.get_with(
-            "browse-no-results-version",
-            "version",
-            state.version_filter.label().to_string(),
-         )
-         .into_owned()
+         // `label()` returns `None` only for `Any`, which is excluded above.
+         let label = state.version_filter.label().unwrap_or_default();
+         loc.get_with("browse-no-results-version", "version", label).into_owned()
       } else if !state.query.is_empty() {
          loc.get("browse-no-query-results").into_owned()
       } else {
