@@ -3,20 +3,20 @@ members  = [ "packages/*", "crates/*" ]
 resolver = "3"
 
 [workspace.package]
-version      = "0.6.0"
+version      = "1.0.0"
 edition      = "2024"
 rust-version = "1.95.0"
 license      = "MPL-2.0"
 readme       = "./docs/README.md"
 description  = "A mod manager for Vintage Story"
-homepage     = "https://github.com/NotAShelf/rustique"
-repository   = "https://github.com/NotAShelf/rustique"
+homepage     = "https://github.com/NotAShelf/lithic"
+repository   = "https://github.com/NotAShelf/lithic"
 
 [workspace.dependencies]
-lithic-cli    = { path = "packages/lithic-cli", version = "0.6.0" }
-lithic-core   = { path = "crates/lithic-core", version = "0.6.0" }
-lithic-gui    = { path = "packages/lithic-gui", version = "0.6.0" }
-lithic-locale = { path = "crates/lithic-locale", version = "0.6.0" }
+lithic-cli    = { path = "packages/lithic-cli", version = "1.0.0" }
+lithic-core   = { path = "crates/lithic-core", version = "1.0.0" }
+lithic-gui    = { path = "packages/lithic-gui", version = "1.0.0" }
+lithic-locale = { path = "crates/lithic-locale", version = "1.0.0" }
 
 fluent        = "0.17.0"
 fluent-syntax = "0.12.0"
