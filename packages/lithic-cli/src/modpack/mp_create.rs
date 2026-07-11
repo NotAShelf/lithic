@@ -20,6 +20,12 @@ use tokio::fs;
 use tracing::{info, warn};
 use yansi::Paint;
 
+/// Convert CLI modpack creation arguments into mod metadata.
+///
+/// # Errors
+///
+/// Currently does not fail, but returns `Result` to match callers that compose
+/// argument collection with fallible modpack preparation.
 pub fn collect_mp_create_args(args: &MPCreateArgs) -> Result<ModInfo, LithicError> {
    Ok(ModInfo {
       name: args.name.clone(),
@@ -43,6 +49,12 @@ pub fn collect_mp_create_args(args: &MPCreateArgs) -> Result<ModInfo, LithicErro
 // If those mods were created from a symlink,
 
 #[allow(clippy::fn_params_excessive_bools)]
+/// Create a local modpack archive and installation directory.
+///
+/// # Errors
+///
+/// Returns an error if metadata cannot be loaded, files cannot be copied or
+/// moved, or the modpack archive cannot be built.
 pub async fn mp_create(
    mod_dir: impl AsRef<Path> + Copy,
    mod_pack: &mut ModInfo,

@@ -10,6 +10,12 @@ use lithic_core::utils::{delete_file, extract_all_mods_metadata};
 use std::collections::HashMap;
 use tracing::info;
 
+/// Delete an installed modpack and remove it from config.
+///
+/// # Errors
+///
+/// Returns an error if the modpack is enabled, cannot be found, or cannot be
+/// removed from disk.
 pub async fn delete_mpk_cmd(mpk_id: ModID) -> Result<ModID, LithicError> {
    // verify the modpack is installed
    // verify its not enable

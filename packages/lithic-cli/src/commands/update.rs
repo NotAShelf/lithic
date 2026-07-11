@@ -15,6 +15,12 @@ use tracing::debug;
 use yansi::Paint;
 
 #[allow(clippy::map_entry)]
+/// Update installed mods in `mod_dir`.
+///
+/// # Errors
+///
+/// Returns an error if sync data cannot be loaded, update metadata cannot be
+/// resolved, files cannot be backed up or removed, or installation fails.
 pub async fn update_mods<V: AsRef<[ModID]>>(
    mod_dir: impl AsRef<Path>,
    update_mod_ids: V,

@@ -15,6 +15,12 @@ use lithic_core::utils::notice;
 #[cfg(windows)]
 use std::process::exit;
 
+/// Disable a modpack by removing its symlinks from `mod_dir`.
+///
+/// # Errors
+///
+/// Returns an error if installed metadata cannot be read, symlinks cannot be
+/// removed, or config cannot be saved.
 pub async fn mp_disable(mpk_id: ModID, mod_dir: impl AsRef<Path>) -> Result<ModID, LithicError> {
    #[cfg(windows)]
    if !is_elevated() {

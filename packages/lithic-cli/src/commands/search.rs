@@ -16,6 +16,11 @@ use std::str::FromStr;
 use tracing::{debug, warn};
 use yansi::Paint;
 
+/// Load the local mod-search cache, refreshing it when missing.
+///
+/// # Errors
+///
+/// Returns an error if the cache cannot be refreshed or parsed.
 pub async fn parse_search_file() -> Result<ModsSearchFile, LithicError> {
    let file_path = Config::get_path().join(FILE_MOD_SEARCH_SYNC);
    if !file_path.exists() {
@@ -28,6 +33,11 @@ pub async fn parse_search_file() -> Result<ModsSearchFile, LithicError> {
    parse_json_file::<ModsSearchFile>(&file_path).await
 }
 
+/// Search the mod index and print matching rows.
+///
+/// # Errors
+///
+/// Returns an error if the search cache cannot be loaded.
 pub async fn search(args: &SearchArgs) -> Result<(), LithicError> {
    let search_file = parse_search_file().await?;
 

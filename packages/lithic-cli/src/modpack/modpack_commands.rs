@@ -69,7 +69,10 @@ pub async fn parse_modpack_commands(commands: &ModpackCommands, mod_dir: impl As
                   .modpacks
                   .disabled
                   .retain(|m| !m.eq_ignore_ascii_case(mpk_id.as_ref()));
-               config.save(None).unwrap();
+               if let Err(e) = config.save(None) {
+                  error!("Failed to persist config after modpack delete: {e}");
+                  exit(1);
+               }
 
                notice(
                   format!("{mpk_id} has been deleted successfully!"),

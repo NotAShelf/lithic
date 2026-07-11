@@ -9,6 +9,11 @@ use lithic_core::errors::LithicError;
 use lithic_core::utils::html_parse;
 use lithic_core::utils::{notice, prep_cell};
 
+/// Print detailed metadata for the requested mods.
+///
+/// # Errors
+///
+/// Returns an error if mod metadata cannot be fetched or parsed.
 pub async fn info(args: &ModInfoArgs) -> Result<(), LithicError> {
    let mods_vec = args.mod_id.clone();
 

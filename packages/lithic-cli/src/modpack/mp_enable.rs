@@ -14,6 +14,12 @@ use lithic_core::utils::{CellData, display_table, notice};
 #[cfg(windows)]
 use std::process::exit;
 
+/// Enable a modpack by linking its installed mods into `mod_dir`.
+///
+/// # Errors
+///
+/// Returns an error if the modpack cannot be found, symlinks cannot be created,
+/// or config cannot be saved.
 pub async fn mp_enable(mpk_id: ModID, mod_dir: impl AsRef<Path>, force: bool) -> Result<String, LithicError> {
    #[cfg(windows)]
    if !is_elevated() {

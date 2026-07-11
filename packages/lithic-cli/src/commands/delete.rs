@@ -15,6 +15,12 @@ use std::path::{Path, PathBuf};
 use tokio::fs::ReadDir;
 use tracing::{info, warn};
 
+/// Delete all mods, backups, or both according to `delete_type`.
+///
+/// # Errors
+///
+/// Returns an error if a target directory cannot be read or if deleting an
+/// entry fails.
 pub async fn delete_all(
    mod_dir: impl AsRef<Path>,
    delete_type: &DeleteArgAllVals,
@@ -46,6 +52,11 @@ pub async fn delete_all(
    Ok(())
 }
 
+/// Delete every entry yielded by `mods`, recording each removed path.
+///
+/// # Errors
+///
+/// Returns an error if directory iteration or file deletion fails.
 pub async fn iterate_and_delete(
    mods: &mut ReadDir,
    result_vec: &mut Vec<PathBuf>,
@@ -66,6 +77,12 @@ pub async fn iterate_and_delete(
 }
 
 #[allow(dead_code)]
+/// Move zip files from `curr_items` into `target_dir`.
+///
+/// # Errors
+///
+/// Returns an error if directory iteration fails or a matching zip cannot be
+/// moved.
 pub async fn iterate_and_move_zip(
    curr_items: &mut ReadDir,
    target_dir: impl AsRef<Path>,
@@ -96,6 +113,12 @@ pub async fn iterate_and_move_zip(
    Ok(())
 }
 
+/// Delete the requested mods from the active mod directory or backup directory.
+///
+/// # Errors
+///
+/// Returns an error if metadata extraction, sync loading, or file deletion
+/// fails.
 pub async fn delete_cmd(
    mod_dir: impl AsRef<Path>,
    mod_ids: Vec<ModID>,

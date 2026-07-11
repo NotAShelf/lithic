@@ -40,6 +40,12 @@ pub fn check_if_mp_enabled(mp_id: &str, array: &[String]) {
    }
 }
 
+/// Install a modpack and its dependencies.
+///
+/// # Errors
+///
+/// Returns an error if metadata cannot be loaded, dependencies cannot be
+/// installed, or config cannot be saved.
 pub async fn mp_install(mp_id: ModID, mp_version: Option<ModVersion>) -> Result<String, LithicError> {
    let start_time = Instant::now();
    // installing the modpack with this function will do the following:
@@ -62,25 +68,18 @@ pub async fn mp_install(mp_id: ModID, mp_version: Option<ModVersion>) -> Result<
    let installed_dir = Path::new(&config.modpacks.modpack_dir).join("installed");
    let packs_dir = Path::new(&config.modpacks.modpack_dir).join("packs");
 
-   let modpack = if found_local_packs.is_some() {
+   let modpack = if let Some((modpack_filename, local_info)) = found_local_packs {
       info!("local_packs: {:#?}", local_packs);
-      let local_pack = local_packs
-         .iter()
-         .find(|(_, info)| info.mod_id.eq_ignore_ascii_case(&mp_id))
-         .unwrap();
-
-      let modpack_filename = local_pack.0;
-
       Installed {
          mod_id: mp_id.clone(),
-         mod_name: local_pack.1.name.clone().into(),
+         mod_name: local_info.name.clone().into(),
          installed_file_path: Some(
             Path::new(&config.modpacks.modpack_dir)
                .join("mypacks")
                .join(modpack_filename),
          ),
          old_file_path: None,
-         install_version: local_pack.1.version.clone().unwrap_or("0.1.0".into()),
+         install_version: local_info.version.clone().unwrap_or("0.1.0".into()),
          success: true, // it's always true since its local
       }
    } else {
@@ -215,6 +214,12 @@ pub async fn mp_install(mp_id: ModID, mp_version: Option<ModVersion>) -> Result<
    ))
 }
 
+/// Install missing dependencies for an already-installed modpack.
+///
+/// # Errors
+///
+/// Returns an error if the modpack cannot be found or dependency installation
+/// fails.
 pub async fn mp_install_missing_deps(mpk_id: ModID) -> Result<(), LithicError> {
    // iterate through all the modpacks and for each one check the dependencies.
    // if the installed/modpack folder is missing, create it and download all deps without checking

@@ -16,6 +16,12 @@ use tracing::{debug, info};
 // Report if trying install a mod that already exists
 // Use -f to force an installation
 // add way to set the version you want to download
+/// Install the requested mods into `mod_dir`.
+///
+/// # Errors
+///
+/// Returns an error if sync data cannot be loaded, mod metadata cannot be
+/// fetched, or installation fails.
 pub async fn install_cmd(
    mod_dir: impl AsRef<Path>,
    mods_requested: Vec<ModID>,
@@ -109,6 +115,11 @@ pub async fn install_cmd(
 
 /// mod_dir_for_req is where the mods_requested will be searched for
 /// all dependencies will be installed to dep_install_path
+///
+/// # Errors
+///
+/// Returns an error if installed metadata or sync data cannot be loaded, or if
+/// dependency installation fails.
 pub async fn install_missing_deps<V: AsRef<[ModID]>>(
    mod_dir_for_req: impl AsRef<Path>,
    mods_requested: V,

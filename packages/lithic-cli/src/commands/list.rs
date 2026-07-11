@@ -43,6 +43,12 @@ fn grab_this_mod_deps(mod_info: &ModInfo, dep_list: &[Install]) -> String {
    clippy::too_many_arguments,
    clippy::fn_params_excessive_bools
 )]
+/// Render the installed-mod list using the requested filters and output mode.
+///
+/// # Errors
+///
+/// Returns an error if sync data or mod metadata cannot be loaded, or if export
+/// output cannot be written.
 pub async fn cmd_list(
    mod_dir: impl AsRef<Path>,
    only_updated: bool,
@@ -269,11 +275,12 @@ pub async fn cmd_list(
                      Some(prep_cell(txt + &mid, the_color, attr, None, None))
                   }
                   Ok(ListColumn::Version) => {
-                     let txt = parse_version(&mod_info.version.clone().unwrap_or_default())
-                        .unwrap()
-                        .to_string();
+                     // Mod authors are not always disciplined about semver; fall
+                     // back to the raw string instead of panicking on `list`.
+                     let raw = mod_info.version.clone().unwrap_or_default();
+                      let txt = parse_version(&raw).map_or_else(|_| raw.to_string(), |v| v.to_string());
                      Some(prep_cell(
-                        txt.to_string(),
+                        txt,
                         color,
                         attr,
                         None,

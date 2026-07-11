@@ -23,6 +23,11 @@ use tracing::{debug, error, info, warn};
 use yansi::Paint;
 
 /// Use this function to retrieve the sync file for mod_dir.
+///
+/// # Errors
+///
+/// Returns an error if syncing is required and fails, or if the sync file cannot
+/// be parsed.
 pub async fn get_sync_data(mod_dir: impl AsRef<Path>, quiet: bool) -> Result<LithicSyncJson, LithicError> {
    let mod_dir = mod_dir.as_ref();
    let fp = mod_dir.join(PathBuf::from(FILE_LITHIC_SYNC));
@@ -36,6 +41,12 @@ pub async fn get_sync_data(mod_dir: impl AsRef<Path>, quiet: bool) -> Result<Lit
    parse_json_file::<LithicSyncJson>(&fp).await
 }
 
+/// Synchronize installed mod metadata for `mod_dir`.
+///
+/// # Errors
+///
+/// Returns an error if remote metadata cannot be fetched, local metadata cannot
+/// be read, or the sync file cannot be written.
 pub async fn sync<V: AsRef<[Package]>>(
    mod_dir: impl AsRef<Path>,
    quiet: bool,
@@ -268,6 +279,12 @@ pub async fn sync<V: AsRef<[Package]>>(
    Ok(sync_data)
 }
 
+/// Refresh the cached mod-search database when stale or forced.
+///
+/// # Errors
+///
+/// Returns an error if the cache cannot be read, refreshed, serialized, or
+/// written.
 pub async fn daily_file_syncs(force: bool) -> Result<ModsSearchFile, LithicError> {
    let config = get_config().read().await;
    let start_time = Instant::now();
@@ -332,6 +349,11 @@ pub async fn daily_file_syncs(force: bool) -> Result<ModsSearchFile, LithicError
    Ok(file_data)
 }
 
+/// Refresh the cached Vintage Story game-version list when stale or forced.
+///
+/// # Errors
+///
+/// Returns an error if versions cannot be fetched, serialized, or written.
 pub async fn game_version_sync(force: bool) -> Result<GameVersionSync, LithicError> {
    let start_time = Instant::now();
    let config = get_config().read().await;

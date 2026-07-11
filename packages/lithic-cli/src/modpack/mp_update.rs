@@ -18,6 +18,12 @@ use std::path::Path;
 use tracing::{debug, error, info};
 use yansi::Paint;
 
+/// Update an installed modpack archive and dependency set.
+///
+/// # Errors
+///
+/// Returns an error if sync data cannot be loaded, the modpack cannot be
+/// fetched, or files cannot be replaced.
 pub async fn mp_update(args: MPUpdateArgs) -> Result<(), LithicError> {
    let config = get_config().read().await;
 
@@ -80,17 +86,19 @@ pub async fn mp_update(args: MPUpdateArgs) -> Result<(), LithicError> {
 
    let installed = match download_requested_mods(&pack_dir, &mut vec![m_install], &client, None).await {
       Ok(i) => {
-         // delete the old file if its named differently from the new
-         // there is only 1 file as we only process 1 modpack at a time
-         if i
-            .first()
-            .is_some_and(|e| !e.installed_file_path.eq(&Some(mp_file_path.clone())))
-         {
+         // Exactly one modpack is processed per call. If the downloader
+         // returned anything else, refuse rather than panic.
+         let Some(first) = i.first().cloned() else {
+            return Err(LithicError::SimpleError(format!(
+               "modpack update returned no installed file for {}",
+               &args.mpk_id
+            )));
+         };
+         if !first.installed_file_path.eq(&Some(mp_file_path.clone())) {
             info!("Deleting old modpack file {}", mp_file_path.display());
             delete_file(&mp_file_path).await?;
          }
-
-         i.first().unwrap().clone()
+         first
       }
       Err(e) => return Err(e),
    };

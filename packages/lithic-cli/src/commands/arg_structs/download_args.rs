@@ -27,6 +27,12 @@ pub struct DownloadArgs {
 }
 
 impl DownloadArgs {
+   /// Validate the requested Vintage Story download target.
+   ///
+   /// # Errors
+   ///
+   /// Returns an error when the selected OS and executable type are not a
+   /// supported Vintage Story download combination.
    pub fn validate(&self) -> Result<(), LithicError> {
       match (&self.exe_type, &self.os_type) {
          (VSExecutabletype::Server, VSOSType::OSX) => Err(LithicError::SimpleError(
