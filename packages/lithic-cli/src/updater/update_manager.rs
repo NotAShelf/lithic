@@ -21,6 +21,12 @@ pub struct GithubApi {
 }
 
 impl GithubApi {
+   /// Create a GitHub API client.
+   ///
+   /// # Panics
+   ///
+   /// Panics only if constructing the static reqwest client configuration fails.
+   #[must_use]
    pub fn new() -> Self {
       Self {
          agent: Arc::new(
@@ -33,10 +39,16 @@ impl GithubApi {
       }
    }
 
+   #[must_use]
    pub fn api_url(endpoint: &str) -> String {
       format!("{GITHUB_LITHIC_URI}/{endpoint}")
    }
 
+   /// Fetch the latest Lithic GitHub release metadata.
+   ///
+   /// # Errors
+   ///
+   /// Returns an error if the request fails or the response cannot be parsed.
    pub async fn get_latest_release(&self) -> Result<GithubReleases, LithicError> {
       let uri = Self::api_url("latest");
       info!("URL: {}", &uri);
@@ -46,6 +58,7 @@ impl GithubApi {
          .header(ACCEPT, "application/vnd.github+json")
          .send()
          .await
+         .and_then(reqwest::Response::error_for_status)
          .map_err(|e| LithicError::SimpleError(format!("get_latest_release: {e}")))?;
 
       let text = response
@@ -62,6 +75,18 @@ impl GithubApi {
    }
 }
 
+impl Default for GithubApi {
+   fn default() -> Self {
+      Self::new()
+   }
+}
+
+/// Check whether a newer Lithic release is available.
+///
+/// # Errors
+///
+/// Returns an error if release metadata cannot be fetched or either version
+/// string cannot be parsed.
 pub async fn check_for_update(hide_message: bool, hide_is_updated_msg: bool) -> Result<bool, LithicError> {
    let client = GithubApi::new();
 
@@ -125,6 +150,12 @@ pub async fn check_for_update(hide_message: bool, hide_is_updated_msg: bool) -> 
    Ok(has_update)
 }
 
+/// Download and install the latest Lithic binary for this platform.
+///
+/// # Errors
+///
+/// Returns an error if update metadata cannot be loaded, the platform is not
+/// supported, the archive cannot be downloaded, or the binary swap fails.
 pub async fn self_update_binary(force_update: bool) -> Result<(), LithicError> {
    // get latest release based in arch
    // download it to a temp dir
@@ -161,7 +192,7 @@ pub async fn self_update_binary(force_update: bool) -> Result<(), LithicError> {
 
    info!("Update found, current version: {current_version}, new version: {latest_version}");
 
-   let platform_bin_name = get_platform_bin_name();
+   let platform_bin_name = get_platform_bin_name()?;
 
    let archive_name = format!("{}.zip", &platform_bin_name);
 
@@ -210,18 +241,28 @@ pub async fn self_update_binary(force_update: bool) -> Result<(), LithicError> {
    Ok(())
 }
 
-pub fn get_platform_bin_name() -> String {
+/// Return the release asset basename for the host platform. Unknown
+/// `(os, arch)` combinations produce a `LithicError` rather than aborting:
+/// users on exotic platforms can still run the rest of the binary, they just
+/// cannot self-update.
+///
+/// # Errors
+///
+/// Returns an error when the current OS and architecture do not map to a
+/// published Lithic release asset.
+pub fn get_platform_bin_name() -> Result<String, LithicError> {
    let os = std::env::consts::OS;
    let arch = std::env::consts::ARCH;
 
    match (os, arch) {
-      ("linux", "x86_64") => "lithic-linux-x86_64".into(),
-      ("linux", "aarch64") => "lithic-linux-aarch64".into(),
-      ("macos", "x86_64") => "lithic-macos-x86_64".into(),
-      ("macos", "aarch64") => "lithic-macos-aarch64".into(),
-      ("windows", "x86_64") => "lithic-windows-x86_64".into(),
-      _ => panic!(
-         "Unable to update binary, unsupported platform. Please open a github issue and state your platform."
-      ),
+      ("linux", "x86_64") => Ok("lithic-linux-x86_64".into()),
+      ("linux", "aarch64") => Ok("lithic-linux-aarch64".into()),
+      ("macos", "x86_64") => Ok("lithic-macos-x86_64".into()),
+      ("macos", "aarch64") => Ok("lithic-macos-aarch64".into()),
+      ("windows", "x86_64") => Ok("lithic-windows-x86_64".into()),
+      (os, arch) => Err(LithicError::SimpleError(format!(
+         "Self-update not supported on {os}/{arch}. \
+          Please open a GitHub issue with your platform and the desired target."
+      ))),
    }
 }

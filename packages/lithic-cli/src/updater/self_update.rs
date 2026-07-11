@@ -1,5 +1,6 @@
 use std::env;
 use std::ffi::OsStr;
+#[cfg(unix)]
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -35,6 +36,12 @@ pub struct LithicUpdater {
 }
 
 impl LithicUpdater {
+   /// Create updater state in a fresh temporary directory.
+   ///
+   /// # Errors
+   ///
+   /// Returns an error if the temp directory cannot be created or the current
+   /// executable path cannot be resolved.
    pub async fn new(binary_name: &str) -> Result<Self, LithicError> {
       let temp_dir = env::temp_dir().join(Uuid::new_v4().to_string());
       if !temp_dir.exists() {
@@ -51,6 +58,12 @@ impl LithicUpdater {
       })
    }
 
+   /// Download and extract an update archive.
+   ///
+   /// # Errors
+   ///
+   /// Returns an error if downloading, extracting, or cleanup after extraction
+   /// failure fails.
    pub async fn download_archive(
       &mut self,
       archive_name: &str,
@@ -68,23 +81,27 @@ impl LithicUpdater {
 
       self.downloaded_path = self.temp_dir.join(archive_name);
 
-      match &self.extract_binary().await {
-         // do cleanup if extraction fails
-         Ok(_) => {}
-         Err(e) => {
-            info!(
-               "{}: {}",
-               "Failed to extract binary.. cleanup temp files".yellow(),
-               e.red().bold()
-            );
-            fs::remove_file(&self.temp_dir.join(archive_name)).await?;
-            fs::remove_dir(&self.temp_dir).await?;
+      if let Err(e) = self.extract_binary().await {
+         info!(
+            "{}: {}",
+            "Failed to extract binary; cleaning up temp files".yellow(),
+            e.red().bold()
+         );
+         if let Err(cleanup_err) = fs::remove_dir_all(&self.temp_dir).await {
+            info!("Failed to clean update temp directory: {cleanup_err}");
          }
-      };
+         return Err(e);
+      }
 
       Ok(self)
    }
 
+   /// Extract the target binary from the downloaded archive.
+   ///
+   /// # Errors
+   ///
+   /// Returns an error if the archive cannot be read, the binary entry is
+   /// missing, or the extracted binary cannot be written.
    pub async fn extract_binary(&self) -> Result<PathBuf, LithicError> {
       info!("Extracting {}", &self.downloaded_path.display());
 
@@ -133,56 +150,42 @@ impl LithicUpdater {
    }
 
    #[cfg(unix)]
+   /// Replace the current Unix binary with the extracted update.
+   ///
+   /// # Errors
+   ///
+   /// Returns an error if permissions cannot be copied, staging or replacing
+   /// the executable fails, or cleanup fails.
    pub async fn update(&self) -> Result<(), LithicError> {
-      // set the permissions of the new file from the old exe
+      // Keep the replacement executable's mode consistent with the binary the
+      // user launched, including non-default executable permissions.
       self.set_new_perms().await?;
 
-      let exe_backup = &self.make_backup().await?;
+      let staged_binary = staged_binary_path(&self.current_binary_path);
+      fs::copy(self.temp_dir.join(&self.new_binary_name), &staged_binary).await?;
 
-      info!("Before copy/delete");
-      // delete the current binary, we already have a backup
-      fs::remove_file(&self.current_binary_path).await?;
-      info!("After copy/delete");
+      // The staged file lives next to the running executable, so this rename
+      // is an atomic replacement on Unix and never leaves the old binary
+      // missing if copying the update fails.
+      fs::rename(&staged_binary, &self.current_binary_path).await?;
 
-      match fs::copy(
-         &self.temp_dir.join(&self.new_binary_name),
-         &self.current_binary_path,
-      )
-      .await
-      {
-         Ok(_) => {
-            notice("Update successful!", Some(Color::Green), vec![Attribute::Bold]);
-            // update successful
-            fs::remove_file(exe_backup).await?; // delete backup
-            fs::remove_file(&self.downloaded_path).await?; // zip archive
-            fs::remove_file(&self.temp_dir.join(&self.new_binary_name)).await?; // the extracted binary - since we copy it
-            fs::remove_dir(&self.temp_dir).await?; // then the temp dir itself, even though this would be deleted on reboot
-            Ok(())
-         }
-         Err(e) => {
-            notice(
-               "Update Failed. Rolling back update.",
-               Some(Color::Red),
-               vec![Attribute::Bold],
-            );
-            let _ = &self.restore_backup(exe_backup);
-            Err(LithicError::SimpleError(format!(
-               "Update failed, restoring backup.. {e}"
-            )))
-         }
-      }
+      notice("Update successful!", Some(Color::Green), vec![Attribute::Bold]);
+      fs::remove_file(&self.downloaded_path).await?;
+      fs::remove_file(self.temp_dir.join(&self.new_binary_name)).await?;
+      fs::remove_dir(&self.temp_dir).await?;
+      Ok(())
    }
 
    #[cfg(unix)]
-   /// Sets the permissions of the temp_dir.join(binary_name)
+   /// Copies the current binary's permissions onto the extracted replacement.
+   ///
+   /// # Errors
+   ///
+   /// Returns an error if permissions cannot be read from the existing binary
+   /// or applied to the extracted binary.
    pub async fn set_new_perms(&self) -> Result<(), LithicError> {
-      use std::os::unix::fs::PermissionsExt;
-
-      info!("Attempting to get perms from the existing binary");
-      let mut perms = fs::metadata(&self.temp_dir.join(&self.new_binary_name))
-         .await?
-         .permissions();
-      perms.set_mode(0o755);
+      info!("Copying permissions from current binary to extracted update");
+      let perms = fs::metadata(&self.current_binary_path).await?.permissions();
       fs::set_permissions(&self.temp_dir.join(&self.new_binary_name), perms).await?;
 
       info!("Permissions copied from current binary to new one");
@@ -197,11 +200,15 @@ impl LithicUpdater {
 
       // load update script and replace placeholders
       let template = include_str!("windows_updater.bat");
+      let exe_name_path = self.get_current_binary_filename()?;
+      let Some(exe_name) = exe_name_path.to_str() else {
+         return Err(LithicError::SimpleError(format!(
+            "current binary filename is not valid UTF-8: {}",
+            exe_name_path.display()
+         )));
+      };
       let script_content = template
-         .replace(
-            "{EXE_NAME}",
-            self.get_current_binary_filename()?.to_str().unwrap(),
-         )
+         .replace("{EXE_NAME}", exe_name)
          .replace(
             "{CURRENT_EXE}",
             self.current_binary_path.to_string_lossy().as_ref(),
@@ -246,6 +253,12 @@ impl LithicUpdater {
       std::process::exit(0);
    }
 
+   /// Copy the current binary into the updater temp directory.
+   ///
+   /// # Errors
+   ///
+   /// Returns an error if the current binary name cannot be resolved or the
+   /// backup copy fails.
    pub async fn make_backup(&self) -> Result<PathBuf, LithicError> {
       let backup_path = &self
          .temp_dir
@@ -257,17 +270,28 @@ impl LithicUpdater {
       Ok(backup_path.clone())
    }
 
-   #[allow(dead_code)]
-   pub async fn restore_backup(&self, backup_path: impl AsRef<Path>) -> Result<(), LithicError> {
-      // with_extension("") to remove the .backup added
-      fs::copy(backup_path, &self.current_binary_path.with_extension("")).await?;
-      Ok(())
-   }
-
    fn get_current_binary_filename(&self) -> Result<&OsStr, LithicError> {
       self
          .current_binary_path
          .file_name()
          .ok_or_else(|| LithicError::SimpleError("Unable to get file name from current exe path".into()))
+   }
+}
+
+#[cfg(unix)]
+fn staged_binary_path(current_binary_path: &Path) -> PathBuf {
+   current_binary_path.with_added_extension("lithic-update")
+}
+
+#[cfg(test)]
+mod tests {
+   #[cfg(unix)]
+   #[test]
+   fn staged_binary_keeps_the_running_binary_name() {
+      let current = std::path::Path::new("/tmp/lithic.bin");
+      assert_eq!(
+         super::staged_binary_path(current),
+         std::path::PathBuf::from("/tmp/lithic.bin.lithic-update")
+      );
    }
 }
