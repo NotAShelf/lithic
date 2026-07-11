@@ -10,6 +10,10 @@ use std::path::Path;
 use std::path::PathBuf;
 use tokio::fs::File;
 
+/// Permissive JSON deserialiser for fields the Vintage Story API returns as
+/// either a string or an integer (e.g. `tagid`). Consumers should call
+/// [`StringOrInt::as_i64`] / [`StringOrInt::as_str`] instead of pattern
+/// matching at every use site.
 #[derive(Debug, Serialize, Deserialize, Clone, Eq, Hash, PartialEq)]
 #[serde(untagged)]
 pub enum StringOrInt {
@@ -23,16 +27,34 @@ impl Default for StringOrInt {
    }
 }
 
-impl Display for StringOrInt {
-   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-      let str = match self {
-         StringOrInt::String(s) => s.clone(),
-         StringOrInt::Int(i) => i.to_string(),
-      };
-      write!(f, "{str}")
+impl StringOrInt {
+   /// Best-effort coercion to `i64`. Returns `None` if the variant is a string
+   /// that does not parse as a signed integer.
+   pub fn as_i64(&self) -> Option<i64> {
+      match self {
+         StringOrInt::Int(i) => Some(*i),
+         StringOrInt::String(s) => s.trim().parse().ok(),
+      }
+   }
+
+   /// Borrow the value as a string slice. Allocates only when the underlying
+   /// variant is the integer one.
+   pub fn as_str(&self) -> std::borrow::Cow<'_, str> {
+      match self {
+         StringOrInt::String(s) => std::borrow::Cow::Borrowed(s),
+         StringOrInt::Int(i) => std::borrow::Cow::Owned(i.to_string()),
+      }
    }
 }
 
+impl Display for StringOrInt {
+   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+      f.write_str(&self.as_str())
+   }
+}
+
+/// Permissive JSON deserialiser for fields that the Vintage Story API returns
+/// as either a string or a boolean (e.g. `requiredOnClient`).
 #[derive(Debug, Serialize, Deserialize, Clone, Eq, Hash, PartialEq)]
 #[serde(untagged)]
 pub enum StringOrBool {
@@ -46,13 +68,27 @@ impl Default for StringOrBool {
    }
 }
 
+impl StringOrBool {
+   /// Best-effort coercion to `bool`. Accepts the strings `"true"` / `"false"`
+   /// case-insensitively; any other string returns `None`.
+   pub fn as_bool(&self) -> Option<bool> {
+      match self {
+         StringOrBool::Bool(b) => Some(*b),
+         StringOrBool::String(s) => match s.trim().to_ascii_lowercase().as_str() {
+            "true" | "yes" | "1" => Some(true),
+            "false" | "no" | "0" => Some(false),
+            _ => None,
+         },
+      }
+   }
+}
+
 impl Display for StringOrBool {
    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-      let str = match self {
-         StringOrBool::String(s) => s.clone(),
-         StringOrBool::Bool(b) => b.to_string(),
-      };
-      write!(f, "{str}")
+      match self {
+         StringOrBool::String(s) => f.write_str(s),
+         StringOrBool::Bool(b) => write!(f, "{b}"),
+      }
    }
 }
 
