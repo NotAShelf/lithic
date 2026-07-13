@@ -1,6 +1,9 @@
 {
   lib,
   craneLib,
+  clang,
+  libclang,
+  mold,
   pkg-config,
   openssl,
   libxkbcommon,
@@ -11,7 +14,11 @@
   pname = "lithic";
   version = cargoTOML.version;
 
-  nativeBuildInputs = [pkg-config];
+  nativeBuildInputs = [
+    clang
+    mold
+    pkg-config
+  ];
 
   buildInputs = [
     openssl
@@ -20,43 +27,51 @@
     vulkan-loader
   ];
 
+  depsSrc = craneLib.cleanCargoSource ../.;
   commonArgs = {
     inherit pname version buildInputs nativeBuildInputs;
     strictDeps = true;
     doCheck = false;
+    src = depsSrc;
 
-    src = let
-      fs = lib.fileset;
-      s = ../.;
-    in
-      fs.toSource {
-        root = s;
-        fileset = fs.intersection (fs.fromSource (craneLib.cleanCargoSource s)) (
-          fs.unions [
-            (s + /crates)
-            (s + /packages)
-
-            (s + /Cargo.toml)
-            (s + /Cargo.lock)
-          ]
-        );
-      };
+    env = {
+      LIBCLANG_PATH = "${libclang.lib}/lib";
+    };
   };
 
   # Pre-build all external deps, this derivation is cached across source changes
   cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+
+  # Build source that includes locale '.ftl' files required by lithic-locale's
+  # include_str! macros. We keep them out of depsSrc so that touching a
+  # translation does not invalidate the cargoArtifacts cache.
+  buildSrc = let
+    fs = lib.fileset;
+    s = ../.;
+  in
+    fs.toSource {
+      root = s;
+      fileset = fs.unions [
+        (fs.fileFilter (file: builtins.any file.hasExt ["ftl"]) (s + /crates))
+        (s + /crates)
+        (s + /packages)
+        (s + /Cargo.toml)
+        (s + /Cargo.lock)
+      ];
+    };
 in
   craneLib.buildPackage (
     commonArgs
     // {
       inherit cargoArtifacts;
+      src = buildSrc;
       useNextest = true;
 
       meta = {
         description = "Fast, cross-platform mod manager for Vintage Story";
         homepage = "https://github.com/notashelf/lithic";
-        license = lib.licenses.mit;
-        maintainers = with lib.maintainers; [NotAShelf];
+        license = lib.licenses.mpl20;
+        maintainers = [lib.maintainers.NotAShelf];
         platforms = lib.platforms.linux ++ lib.platforms.darwin;
         mainProgram = "lithic";
       };
