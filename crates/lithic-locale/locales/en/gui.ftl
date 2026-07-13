@@ -10,7 +10,7 @@ nav-settings      = Settings
 ## App title
 app-title        = Lithic - Vintage Story Mod Manager
 app-brand        = Lithic
-app-version      = v0.5.16 α
+app-version      = { $version }
 
 ## Browse view
 browse-title                = Browse Mods

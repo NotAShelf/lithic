@@ -21,6 +21,8 @@ use crate::views::settings::SettingsView;
 use crate::views::settings::{InitialPageOption, ThemeModeOption};
 use crate::views::{browse, game_versions, installed, instances, settings};
 
+const VERSION: &str = concat!("v", env!("CARGO_PKG_VERSION"));
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum View {
    Browse,
@@ -1375,7 +1377,7 @@ impl App {
          column(nav_buttons).spacing(2).padding([4, 0]),
          iced::widget::space::vertical(),
          rule::horizontal(1),
-         container(text(loc.get("app-version")).size(11).color(iced::Color {
+          container(text(loc.get_with("app-version", "version", VERSION)).size(11).color(iced::Color {
             r: 0.40,
             g: 0.40,
             b: 0.40,
