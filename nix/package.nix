@@ -7,8 +7,9 @@
   wayland,
   vulkan-loader,
 }: let
+  cargoTOML = (lib.importTOML ../Cargo.toml).workspace.package;
   pname = "lithic";
-  version = "0.6.0";
+  version = cargoTOML.version;
 
   nativeBuildInputs = [pkg-config];
 
