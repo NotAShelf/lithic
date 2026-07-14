@@ -91,11 +91,6 @@ pub struct Config {
    pub initial_page: String,
 }
 
-#[cfg(windows)]
-fn default_true() -> bool {
-   true
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ModPacks {
    #[serde(default)]
@@ -372,9 +367,9 @@ fn ensure_config_can_save(load_error: Option<&str>) -> Result<(), LithicError> {
 
 // Initiate the CONFIG in the main file so its ready everywhere else
 pub fn init_config() -> Result<(), LithicError> {
-    let config = Config::new().inspect_err(|e| {
-       let _ = CONFIG_LOAD_ERROR.set(e.to_string());
-    })?;
+   let config = Config::new().inspect_err(|e| {
+      let _ = CONFIG_LOAD_ERROR.set(e.to_string());
+   })?;
 
    if CONFIG.set(RwLock::new(config)).is_err() {
       return Err(LithicError::ConfigFileError(

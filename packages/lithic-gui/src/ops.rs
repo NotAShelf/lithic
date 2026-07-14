@@ -270,7 +270,7 @@ pub async fn install_mod(mod_dir: PathBuf, mod_id: String) -> Result<String, Str
       if file_name.is_empty() {
          continue;
       }
-      let is_primary = inst.mod_id.as_ref() == mod_id;
+      let is_primary = inst.mod_id.0 == mod_id;
       sync_map.insert(
          inst.mod_id.to_string(),
          ModSyncInfo {
