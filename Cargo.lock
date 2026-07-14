@@ -2569,7 +2569,7 @@ checksum = "92daf443525c4cce67b150400bc2316076100ce0b3686209eb8cf3c31612e6f0"
 
 [[package]]
 name = "lithic"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "color-eyre",
  "lithic-cli",
@@ -2579,7 +2579,7 @@ dependencies = [
 
 [[package]]
 name = "lithic-cli"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "async_zip",
  "chrono",
@@ -2613,7 +2613,7 @@ dependencies = [
 
 [[package]]
 name = "lithic-core"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "async_zip",
  "chrono",
@@ -2642,7 +2642,7 @@ dependencies = [
 
 [[package]]
 name = "lithic-gui"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "dirs",
  "futures",
@@ -2661,7 +2661,7 @@ dependencies = [
 
 [[package]]
 name = "lithic-locale"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "fluent",
  "unic-langid",
