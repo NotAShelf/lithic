@@ -9,6 +9,7 @@
   libxkbcommon,
   wayland,
   vulkan-loader,
+  makeWrapper,
 }: let
   cargoTOML = (lib.importTOML ../Cargo.toml).workspace.package;
   pname = "lithic";
@@ -18,6 +19,7 @@
     clang
     mold
     pkg-config
+    makeWrapper
   ];
 
   buildInputs = [
@@ -25,6 +27,12 @@
     libxkbcommon
     wayland
     vulkan-loader
+  ];
+
+  runtimeInputs = [
+    libxkbcommon
+    vulkan-loader
+    wayland
   ];
 
   depsSrc = craneLib.cleanCargoSource ../.;
@@ -66,6 +74,13 @@ in
       inherit cargoArtifacts;
       src = buildSrc;
       useNextest = true;
+
+      postFixup = ''
+        for bin in $out/bin/*; do
+          wrapProgram "$bin" \
+            --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath runtimeInputs}
+        done
+      '';
 
       meta = {
         description = "Fast, cross-platform mod manager for Vintage Story";
