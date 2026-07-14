@@ -85,9 +85,9 @@ where
       .entries()
       .iter()
       .position(|e| {
-          e.filename()
-             .as_str()
-             .is_ok_and(|s| s.eq_ignore_ascii_case(inner_file))
+         e.filename()
+            .as_str()
+            .is_ok_and(|s| s.eq_ignore_ascii_case(inner_file))
       })
       .ok_or_else(|| LithicError::ZipError {
          context: format!("Failed to find {} in {:?}", inner_file, entry.file_name()),
@@ -392,29 +392,35 @@ pub fn write_atomic_sync(path: impl AsRef<Path>, bytes: &[u8]) -> Result<(), Lit
 pub async fn write_atomic_async(path: impl AsRef<Path>, bytes: &[u8]) -> Result<(), LithicError> {
    let path = path.as_ref();
    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-   tokio::fs::create_dir_all(parent).await.map_err(|e| LithicError::IoError {
-      context: format!("creating parent directory for {}", path.display()),
-      source: e,
-   })?;
+   tokio::fs::create_dir_all(parent)
+      .await
+      .map_err(|e| LithicError::IoError {
+         context: format!("creating parent directory for {}", path.display()),
+         source: e,
+      })?;
    let tmp = tempfile_path(path);
    {
       let mut f = File::create(&tmp).await.map_err(|e| LithicError::IoError {
          context: format!("creating temp file {}", tmp.display()),
          source: e,
       })?;
-      AsyncWriteExt::write_all(&mut f, bytes).await.map_err(|e| LithicError::IoError {
-         context: format!("writing temp file {}", tmp.display()),
-         source: e,
-      })?;
+      AsyncWriteExt::write_all(&mut f, bytes)
+         .await
+         .map_err(|e| LithicError::IoError {
+            context: format!("writing temp file {}", tmp.display()),
+            source: e,
+         })?;
       f.sync_all().await.map_err(|e| LithicError::IoError {
          context: format!("fsync temp file {}", tmp.display()),
          source: e,
       })?;
    }
-   tokio::fs::rename(&tmp, path).await.map_err(|e| LithicError::IoError {
-      context: format!("rename {} -> {}", tmp.display(), path.display()),
-      source: e,
-   })
+   tokio::fs::rename(&tmp, path)
+      .await
+      .map_err(|e| LithicError::IoError {
+         context: format!("rename {} -> {}", tmp.display(), path.display()),
+         source: e,
+      })
 }
 
 fn tempfile_path(target: &Path) -> PathBuf {
@@ -434,10 +440,7 @@ mod atomic_write_tests {
 
    #[test]
    fn atomic_write_replaces_existing_contents() {
-      let path = std::env::temp_dir().join(format!(
-         "lithic-atomic-write-test-{}",
-         std::process::id()
-      ));
+      let path = std::env::temp_dir().join(format!("lithic-atomic-write-test-{}", std::process::id()));
       std::fs::write(&path, b"old").unwrap();
 
       write_atomic_sync(&path, b"new").unwrap();

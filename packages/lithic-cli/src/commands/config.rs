@@ -41,7 +41,7 @@ async fn set(args: &CommonArgs) {
    if let Some(path) = &args.mods_dir {
       let dir = get_expanded_path(PathBuf::from(path));
       if dir.exists() {
-          config.mod_dir = dir;
+         config.mod_dir = dir;
          save = true;
 
          display_vec.push(command_output("config.mods_dir", path));
@@ -53,7 +53,7 @@ async fn set(args: &CommonArgs) {
    if let Some(path) = &args.modpacks_dir {
       let dir = get_expanded_path(PathBuf::from(path));
       if dir.exists() {
-          config.modpacks.modpack_dir = dir;
+         config.modpacks.modpack_dir = dir;
          save = true;
 
          display_vec.push(command_output("config.modpacks_dir", path));
@@ -81,14 +81,14 @@ async fn set(args: &CommonArgs) {
       // The upstream `gameversions` feed sometimes carries pre-release labels
       // (e.g. "1.5.4-dev.2") that don't parse as strict semver. Anything we
       // can't parse sorts to the bottom rather than aborting.
-      game_versions.game_versions.sort_by(|v1, v2| {
-         match (parse_version(v1), parse_version(v2)) {
+      game_versions
+         .game_versions
+         .sort_by(|v1, v2| match (parse_version(v1), parse_version(v2)) {
             (Ok(a), Ok(b)) => a.cmp(&b),
             (Ok(_), Err(_)) => std::cmp::Ordering::Greater,
             (Err(_), Ok(_)) => std::cmp::Ordering::Less,
             (Err(_), Err(_)) => v1.cmp(v2),
-         }
-      });
+         });
 
       game_versions.game_versions.reverse();
 
@@ -156,7 +156,7 @@ async fn set(args: &CommonArgs) {
    if let Some(backup_dir) = &args.backup_mods_dir {
       let dir = get_expanded_path(PathBuf::from(backup_dir));
       if dir.exists() {
-          config.backup_mods_dir.clone_from(&dir);
+         config.backup_mods_dir.clone_from(&dir);
          save = true;
 
          display_vec.push(command_output(
@@ -171,7 +171,7 @@ async fn set(args: &CommonArgs) {
    if let Some(download_dir) = &args.game_download_dir {
       let dir = get_expanded_path(PathBuf::from(download_dir));
       if dir.exists() {
-          config.game_download_dir = dir;
+         config.game_download_dir = dir;
          save = true;
 
          display_vec.push(command_output("config.game_download_dir", download_dir));
@@ -253,10 +253,10 @@ async fn del(args: &DelArgs) {
    if args.backup_mods_dir {
       config.backup_mods_dir.clone_from(&defaults.backup_mods_dir);
       save = true;
-       display_vec.push(command_output(
-          "config.backup_mods_dir",
-          defaults.backup_mods_dir.display().to_string(),
-       ));
+      display_vec.push(command_output(
+         "config.backup_mods_dir",
+         defaults.backup_mods_dir.display().to_string(),
+      ));
    }
 
    if args.modpack_dir {
@@ -267,7 +267,7 @@ async fn del(args: &DelArgs) {
       save = true;
       display_vec.push(command_output(
          "config.modpacks.modpack_dir",
-          defaults.modpacks.modpack_dir.display().to_string(),
+         defaults.modpacks.modpack_dir.display().to_string(),
       ));
    }
 
@@ -294,10 +294,10 @@ async fn del(args: &DelArgs) {
    if args.mod_dir {
       config.mod_dir.clone_from(&defaults.mod_dir);
       save = true;
-       display_vec.push(command_output(
-          "config.mod_dir",
-          defaults.mod_dir.display().to_string(),
-       ));
+      display_vec.push(command_output(
+         "config.mod_dir",
+         defaults.mod_dir.display().to_string(),
+      ));
    }
 
    if args.notify_of_unzipped_mods {
@@ -331,7 +331,7 @@ async fn del(args: &DelArgs) {
       save = true;
       display_vec.push(command_output(
          "config.game_download_dir",
-          defaults.game_download_dir.display().to_string(),
+         defaults.game_download_dir.display().to_string(),
       ));
    }
 
@@ -391,15 +391,15 @@ async fn del(args: &DelArgs) {
 async fn list() {
    let config = get_config().read().await;
    let display_vec: Vec<(CellData, CellData)> = vec![
-       command_output("config.mod_dir", config.mod_dir.display().to_string()),
-       command_output(
-          "config.backup_mods_dir",
-          config.backup_mods_dir.display().to_string(),
-       ),
-       command_output(
-          "config.game_download_dir",
-          config.game_download_dir.display().to_string(),
-       ),
+      command_output("config.mod_dir", config.mod_dir.display().to_string()),
+      command_output(
+         "config.backup_mods_dir",
+         config.backup_mods_dir.display().to_string(),
+      ),
+      command_output(
+         "config.game_download_dir",
+         config.game_download_dir.display().to_string(),
+      ),
       command_output("config.backup_mods", config.backup_mods.to_string()),
       command_output(
          "config.show_execution_time",
@@ -423,7 +423,7 @@ async fn list() {
       command_output("", ""),
       command_output(
          "config.modpacks.modpack_dir",
-          config.modpacks.modpack_dir.display().to_string(),
+         config.modpacks.modpack_dir.display().to_string(),
       ),
       command_output("config.modpacks.enabled", config.modpacks.enabled.join(",")),
       command_output("config.modpacks.disabled", config.modpacks.disabled.join(",")),

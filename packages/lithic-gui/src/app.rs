@@ -1377,12 +1377,16 @@ impl App {
          column(nav_buttons).spacing(2).padding([4, 0]),
          iced::widget::space::vertical(),
          rule::horizontal(1),
-          container(text(loc.get_with("app-version", "version", VERSION)).size(11).color(iced::Color {
-            r: 0.40,
-            g: 0.40,
-            b: 0.40,
-            a: 1.0
-         }))
+         container(
+            text(loc.get_with("app-version", "version", VERSION))
+               .size(11)
+               .color(iced::Color {
+                  r: 0.40,
+                  g: 0.40,
+                  b: 0.40,
+                  a: 1.0
+               })
+         )
          .padding([8, 16]),
       ])
       .style(|_theme: &iced::Theme| iced::widget::container::Style {

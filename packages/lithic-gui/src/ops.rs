@@ -457,10 +457,7 @@ pub async fn load_game_versions() -> Result<Vec<String>, String> {
       // but it must not silently masquerade as success: a stale cache will
       // mislead future loads. Log so it surfaces in `--verbose` runs.
       if let Err(e) = write_json_file(&path, json, &Config::get_path()).await {
-         tracing::warn!(
-            "failed to persist game-version cache to {}: {e}",
-            path.display()
-         );
+         tracing::warn!("failed to persist game-version cache to {}: {e}", path.display());
       }
       sorted
    };
@@ -720,9 +717,9 @@ pub async fn install_game_version(
                   total,
                } => {
                   p.stage = stage;
-                   p.percent = total
-                      .and_then(|t| downloaded.saturating_mul(100).checked_div(t))
-                      .map(|percent| percent.min(100) as u8);
+                  p.percent = total
+                     .and_then(|t| downloaded.saturating_mul(100).checked_div(t))
+                     .map(|percent| percent.min(100) as u8);
                }
             }
          }
@@ -736,12 +733,12 @@ pub async fn install_game_version(
       p.percent = Some(100);
       p.logs.push(
          locale()
-             .get_with(
-                "ops-game-install-log-finished",
-                "path",
-                installed.path.display().to_string(),
-             )
-             .into_owned(),
+            .get_with(
+               "ops-game-install-log-finished",
+               "path",
+               installed.path.display().to_string(),
+            )
+            .into_owned(),
       );
    }
    let installed_path = installed.path.display().to_string();
@@ -751,8 +748,8 @@ pub async fn install_game_version(
          "version",
          installed.version,
          "path",
-          installed_path,
-       )
+         installed_path,
+      )
       .into_owned())
 }
 

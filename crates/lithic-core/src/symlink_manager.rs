@@ -28,10 +28,7 @@ impl SymlinkManager {
       #[cfg(windows)]
       {
          let meta = tokio::fs::metadata(target).await.map_err(|e| {
-            LithicError::SimpleError(format!(
-               "cannot stat symlink target {}: {e}",
-               target.display()
-            ))
+            LithicError::SimpleError(format!("cannot stat symlink target {}: {e}", target.display()))
          })?;
          let res = if meta.is_dir() {
             symlink_dir(target, link).await

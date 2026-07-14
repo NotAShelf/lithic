@@ -1,12 +1,12 @@
 use crate::aliases::{ModFileName, ModID, ModName, ModVersion};
-use crate::errors::LithicError;
 use crate::consts::FILE_LITHIC_SYNC;
+use crate::errors::LithicError;
 use crate::utils::{get_current_time, prettify, write_atomic_async};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::default::Default;
-use std::path::Path;
 use std::io::ErrorKind;
+use std::path::Path;
 use tracing::debug;
 
 #[derive(Deserialize, Serialize, Debug, Clone)]

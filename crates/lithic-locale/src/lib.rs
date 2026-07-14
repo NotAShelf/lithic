@@ -123,11 +123,7 @@ impl Localizer {
    }
 
    /// Convenience: format a message with three named arguments.
-   pub fn get_with3<'a>(
-      &'a self,
-      id: &str,
-      values: [(&'a str, FluentValue<'a>); 3],
-   ) -> Cow<'static, str> {
+   pub fn get_with3<'a>(&'a self, id: &str, values: [(&'a str, FluentValue<'a>); 3]) -> Cow<'static, str> {
       let mut args = FluentArgs::new();
       for (key, value) in values {
          args.set(key, value);

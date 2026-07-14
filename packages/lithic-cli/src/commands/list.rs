@@ -278,14 +278,8 @@ pub async fn cmd_list(
                      // Mod authors are not always disciplined about semver; fall
                      // back to the raw string instead of panicking on `list`.
                      let raw = mod_info.version.clone().unwrap_or_default();
-                      let txt = parse_version(&raw).map_or_else(|_| raw.to_string(), |v| v.to_string());
-                     Some(prep_cell(
-                        txt,
-                        color,
-                        attr,
-                        None,
-                        Some(CellAlignment::Right),
-                     ))
+                     let txt = parse_version(&raw).map_or_else(|_| raw.to_string(), |v| v.to_string());
+                     Some(prep_cell(txt, color, attr, None, Some(CellAlignment::Right)))
                   }
                   Ok(ListColumn::LatestVersion) => {
                      // No need to show LatestVersion for local modpack, they are always the latest version

@@ -258,7 +258,10 @@ impl ApiClient {
             let pb = pb.clone();
             async move {
                info!("ModID: {mod_id}");
-               let result = client.fetch_mod(&mod_id).await.map(|the_mod| (mod_id.clone(), the_mod));
+               let result = client
+                  .fetch_mod(&mod_id)
+                  .await
+                  .map(|the_mod| (mod_id.clone(), the_mod));
                match result {
                   Ok((mod_id, mod_info)) => {
                      pb.set_message(mod_id.to_string());
@@ -401,12 +404,7 @@ mod tests {
 
    #[test]
    fn linux_client_filename() {
-      let name = build_release_filename(
-         &VSOSType::Linux,
-         &VSExecutabletype::Client,
-         None,
-         "1.20.0",
-      );
+      let name = build_release_filename(&VSOSType::Linux, &VSExecutabletype::Client, None, "1.20.0");
       assert_eq!(name, "vs_client_linux-x64_1.20.0.tar.gz");
    }
 
@@ -434,23 +432,13 @@ mod tests {
 
    #[test]
    fn windows_server_archive() {
-      let name = build_release_filename(
-         &VSOSType::Windows,
-         &VSExecutabletype::Server,
-         None,
-         "1.20.0",
-      );
+      let name = build_release_filename(&VSOSType::Windows, &VSExecutabletype::Server, None, "1.20.0");
       assert_eq!(name, "vs_server_win-x64_1.20.0.zip");
    }
 
    #[test]
    fn osx_client_tarball() {
-      let name = build_release_filename(
-         &VSOSType::OSX,
-         &VSExecutabletype::Client,
-         None,
-         "1.20.0",
-      );
+      let name = build_release_filename(&VSOSType::OSX, &VSExecutabletype::Client, None, "1.20.0");
       assert_eq!(name, "vs_client_osx-x64_1.20.0.tar.gz");
    }
 }

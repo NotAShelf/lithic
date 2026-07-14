@@ -183,14 +183,14 @@ impl Default for Config {
       info!("modpack_dir {}", modpack_dir.display());
 
       Self {
-          mod_dir: LithicOptions::default().mod_dir.unwrap_or_default(),
+         mod_dir: LithicOptions::default().mod_dir.unwrap_or_default(),
          pinned_game_version: String::new(), // if its empty then get the latest
          zip_mod_files: false,
          backup_mods: false,
-          backup_mods_dir,
+         backup_mods_dir,
          show_execution_time: true,
          notify_of_unzipped_mods: false,
-          game_download_dir: dirs::download_dir().unwrap_or_default(),
+         game_download_dir: dirs::download_dir().unwrap_or_default(),
          sync_latest_game_version_file_every: 24,
          sync_mod_search_file_every: 24,
          pkg: Vec::default(),
@@ -396,9 +396,7 @@ pub fn get_config() -> &'static RwLock<Config> {
    CONFIG.get_or_init(|| {
       let config = Config::new().unwrap_or_else(|e| {
          let _ = CONFIG_LOAD_ERROR.set(e.to_string());
-         tracing::error!(
-            "config not initialised and lazy load failed ({e}); using in-memory defaults"
-         );
+         tracing::error!("config not initialised and lazy load failed ({e}); using in-memory defaults");
          Config::default()
       });
       RwLock::new(config)

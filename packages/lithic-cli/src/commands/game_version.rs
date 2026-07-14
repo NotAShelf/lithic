@@ -23,13 +23,7 @@ pub async fn parse_game_version_commands(commands: &GameVersionCommands) -> Resu
       GameVersionSubCommands::List => {
          let versions = lithic_core::instance::list_game_versions().await?;
          for v in versions {
-            println!(
-               "{}\t{}\t{}\t{:?}",
-               v.id,
-               v.version,
-               v.path.display(),
-               v.source
-            );
+            println!("{}\t{}\t{}\t{:?}", v.id, v.version, v.path.display(), v.source);
          }
          Ok(())
       }

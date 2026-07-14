@@ -52,14 +52,14 @@ pub fn view<'a>(state: &'a InstancesView, loc: &'a Localizer) -> Element<'a, Mes
       .iter()
       .find(|i| i.id == state.active_instance_id)
       .map(|i| {
-          loc.get_with3(
-             "instances-active-summary",
-             [
-                ("name", i.name.as_str().into()),
-                ("version", i.game_version_id.as_str().into()),
-                ("mods_dir", i.mods_dir.display().to_string().into()),
-             ],
-          )
+         loc.get_with3(
+            "instances-active-summary",
+            [
+               ("name", i.name.as_str().into()),
+               ("version", i.game_version_id.as_str().into()),
+               ("mods_dir", i.mods_dir.display().to_string().into()),
+            ],
+         )
          .into_owned()
       })
       .unwrap_or_else(|| loc.get("instances-no-active").into_owned());
@@ -198,12 +198,12 @@ pub fn view<'a>(state: &'a InstancesView, loc: &'a Localizer) -> Element<'a, Mes
                      inst.id.as_str()
                   ))
                   .size(14),
-                   text(loc.get_with(
-                      "instances-card-mods-dir",
-                      "dir",
-                      inst.mods_dir.display().to_string()
-                   ))
-                   .size(12),
+                  text(loc.get_with(
+                     "instances-card-mods-dir",
+                     "dir",
+                     inst.mods_dir.display().to_string()
+                  ))
+                  .size(12),
                   text(loc.get_with(
                      "instances-card-game-version",
                      "version",

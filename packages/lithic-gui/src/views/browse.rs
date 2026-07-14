@@ -254,7 +254,8 @@ pub fn view<'a>(state: &'a BrowseView, loc: &'a Localizer) -> Element<'a, Messag
       } else if !matches!(state.version_filter, VersionFilter::Any) && state.query.is_empty() {
          // `label()` returns `None` only for `Any`, which is excluded above.
          let label = state.version_filter.label().unwrap_or_default();
-         loc.get_with("browse-no-results-version", "version", label).into_owned()
+         loc.get_with("browse-no-results-version", "version", label)
+            .into_owned()
       } else if !state.query.is_empty() {
          loc.get("browse-no-query-results").into_owned()
       } else {
