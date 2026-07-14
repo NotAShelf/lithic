@@ -372,10 +372,9 @@ fn ensure_config_can_save(load_error: Option<&str>) -> Result<(), LithicError> {
 
 // Initiate the CONFIG in the main file so its ready everywhere else
 pub fn init_config() -> Result<(), LithicError> {
-   let config = Config::new().map_err(|e| {
-      let _ = CONFIG_LOAD_ERROR.set(e.to_string());
-      e
-   })?;
+    let config = Config::new().inspect_err(|e| {
+       let _ = CONFIG_LOAD_ERROR.set(e.to_string());
+    })?;
 
    if CONFIG.set(RwLock::new(config)).is_err() {
       return Err(LithicError::ConfigFileError(
