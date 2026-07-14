@@ -3,6 +3,7 @@ use crate::modpack::mp_disable::mp_disable;
 use crate::modpack::mp_enable::mp_enable;
 use comfy_table::{Attribute, CellAlignment, Color};
 use is_elevated::is_elevated;
+use lithic_core::aliases::ModID;
 use lithic_core::config::manager::get_config;
 use lithic_core::errors::LithicError;
 use lithic_core::utils::extract_all_mods_metadata;
@@ -107,14 +108,14 @@ pub async fn check_old_default_windows() -> Result<(), LithicError> {
             info!("User running with admin right, continuing");
 
             for mpk_id in &enabled_modpacks {
-               match mp_disable(mpk_id.clone(), &old_default).await {
+                match mp_disable(ModID::from(mpk_id.clone()), &old_default).await {
                   Ok(modpack) => {
                      let mut config = get_config().write().await;
                      config
                         .modpacks
                         .enabled
                         .retain(|m| !m.eq_ignore_ascii_case(&modpack));
-                     config.modpacks.disabled.push(modpack.clone());
+                      config.modpacks.disabled.push(modpack.to_string());
                      config.save(None)?;
                      info!("disabled {modpack}")
                   }
@@ -145,14 +146,14 @@ pub async fn check_old_default_windows() -> Result<(), LithicError> {
 
          if Path::new(&mod_dir) == old_default {
             let mut config = get_config().write().await;
-            config.mod_dir = new_default.to_string_lossy().to_string();
+             config.mod_dir = new_default.to_path_buf();
             config.update_default_windows_loc = false; // set this to false so we don't try to run the update again
             config.save(None)?;
             info!("Updated mod_dir in config to new path {}", new_default.display());
          }
 
          for mpk_id in &enabled_modpacks {
-            match mp_enable(mpk_id.clone(), &new_default, true).await {
+             match mp_enable(ModID::from(mpk_id.clone()), &new_default, true).await {
                Ok(modpack) => {
                   let mut config = get_config().write().await;
                   info!("Enabled {modpack}");
