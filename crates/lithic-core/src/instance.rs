@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::fs::File;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
@@ -279,7 +279,7 @@ where
       .and_then(|ct_len| ct_len.to_str().ok())
       .and_then(|ct_len| ct_len.parse::<u64>().ok());
 
-   let mut res = client.get_request(url).await?;
+   let mut res = client.get_download(url).await?;
    let mut file = File::create(save_loc).await?;
    let mut downloaded = 0;
    while let Some(chunk) = res
@@ -461,13 +461,34 @@ pub async fn launch_instance(instance_id: Option<String>) -> Result<(), String> 
    args.push(format!("--dataPath={}", instance.data_dir.display()));
    args.extend(instance.start_params.split_whitespace().map(ToString::to_string));
 
+   // Mirror the vendor's run.sh: launch from the game directory and use the
+   // bundled fonts.conf when present.
+   let fonts_conf = version.path.join("fonts.conf");
+
+   // Redirect game output to a log file so startup failures (e.g. a missing
+   // .NET runtime) are diagnosable instead of surfacing as a bare exit code.
+   let log_path = instance.data_dir.join("lithic-launch.log");
+   if let Some(parent) = log_path.parent() {
+      tokio::fs::create_dir_all(parent)
+         .await
+         .map_err(|e| e.to_string())?;
+   }
+   let stdout_log = File::create(&log_path).await.map_err(|e| e.to_string())?;
+   let stderr_log = stdout_log.try_clone().await.map_err(|e| e.to_string())?;
+
    let start = now_ms();
-   let mut cmd = Command::new(command);
-   cmd.args(args);
+   let mut cmd = tokio::process::Command::new(command);
+   cmd.args(args)
+      .current_dir(&version.path)
+      .stdout(stdout_log.into_std().await)
+      .stderr(stderr_log.into_std().await);
+   if fonts_conf.exists() {
+      cmd.env("FONTCONFIG_FILE", &fonts_conf);
+   }
    for (k, v) in parse_env_vars(&instance.env_vars) {
       cmd.env(k, v);
    }
-   let status = cmd.status().map_err(|e| e.to_string())?;
+   let status = cmd.status().await.map_err(|e| e.to_string())?;
    let end = now_ms();
 
    {
@@ -480,7 +501,51 @@ pub async fn launch_instance(instance_id: Option<String>) -> Result<(), String> 
    }
 
    if !status.success() {
-      return Err(format!("Game exited with status: {status}"));
+      let tail = launch_log_tail(&log_path).await;
+      return Err(if tail.is_empty() {
+         format!("Game exited with status: {status} (log: {})", log_path.display())
+      } else {
+         format!(
+            "Game exited with status: {status}. {tail} (log: {})",
+            log_path.display()
+         )
+      });
    }
    Ok(())
+}
+
+/// Last few non-empty lines of the launch log, for surfacing startup failures.
+async fn launch_log_tail(path: &Path) -> String {
+   let mut file = match File::open(path).await {
+      Ok(file) => file,
+      Err(_) => return String::new(),
+   };
+   let len = file.metadata().await.map(|m| m.len()).unwrap_or(0);
+   if file
+      .seek(std::io::SeekFrom::Start(len.saturating_sub(4096)))
+      .await
+      .is_err()
+   {
+      return String::new();
+   }
+   let mut buf = Vec::new();
+   if file.read_to_end(&mut buf).await.is_err() {
+      return String::new();
+   }
+   let text = String::from_utf8_lossy(&buf);
+   let tail: Vec<&str> = text
+      .lines()
+      .filter(|line| !line.trim().is_empty())
+      .rev()
+      .take(5)
+      .collect();
+   tail
+      .iter()
+      .rev()
+      .copied()
+      .collect::<Vec<_>>()
+      .join(" | ")
+      .chars()
+      .take(600)
+      .collect()
 }

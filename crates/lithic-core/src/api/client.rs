@@ -33,6 +33,11 @@ pub const MAX_CONCURRENT_MOD_FETCHES: usize = 5;
 #[derive(Debug, Clone)]
 pub struct ApiClient {
    agent: Arc<reqwest::Client>,
+   /// Separate client for file downloads: no total-request timeout (a
+   /// multi-hundred-MB tarball cannot finish inside the API timeout, and
+   /// reqwest applies it to body streaming too), only a connect timeout so
+   /// unreachable hosts still fail fast.
+   download_agent: Arc<reqwest::Client>,
 }
 
 impl Default for ApiClient {
@@ -108,6 +113,13 @@ impl ApiClient {
                .build()
                .expect("reqwest::Client builder invariant: default TLS backend available"),
          ),
+         download_agent: Arc::new(
+            reqwest::Client::builder()
+               .connect_timeout(Duration::from_secs(20))
+               .user_agent(LITHIC_USER_AGENT)
+               .build()
+               .expect("reqwest::Client builder invariant: default TLS backend available"),
+         ),
       }
    }
 
@@ -115,7 +127,10 @@ impl ApiClient {
    /// scenarios that want to plug in a custom transport (mock server, fixed
    /// proxy, alternate timeout, ...).
    pub fn with_agent(agent: Arc<reqwest::Client>) -> Self {
-      Self { agent }
+      Self {
+         agent: agent.clone(),
+         download_agent: agent,
+      }
    }
 
    pub fn api_uri(endpoint: &str) -> String {
@@ -326,6 +341,22 @@ impl ApiClient {
          .and_then(Response::error_for_status)
          .map_err(|e| LithicError::ApiError {
             context: format!("get_request: {mod_uri}"),
+            source: e,
+         })
+   }
+
+   /// GET a file download on the timeout-free download agent. Use this for
+   /// any large artifact (game tarballs, mod archives); [`Self::get_request`]
+   /// is capped by the API timeout and will abort mid-stream.
+   pub async fn get_download(&self, uri: &str) -> Result<Response, LithicError> {
+      self
+         .download_agent
+         .get(uri)
+         .send()
+         .await
+         .and_then(Response::error_for_status)
+         .map_err(|e| LithicError::ApiError {
+            context: format!("get_download: {uri}"),
             source: e,
          })
    }

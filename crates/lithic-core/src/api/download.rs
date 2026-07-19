@@ -171,7 +171,7 @@ pub async fn download_and_verify(
 ) -> Result<PathBuf, LithicError> {
    let file_path = file_path.as_ref();
    let response = api_client
-      .get_request(url.as_ref())
+      .get_download(url.as_ref())
       .await
       .map_err(|e| LithicError::SimpleError(e.to_string()))?;
 
