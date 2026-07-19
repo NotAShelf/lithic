@@ -14,6 +14,7 @@ dirs               = { workspace = true }
 futures            = { workspace = true }
 human_format       = { workspace = true }
 iced               = { workspace = true }
+lenient_semver     = { workspace = true }
 lithic-core        = { workspace = true }
 lithic-locale      = { workspace = true }
 native-theme       = { workspace = true }

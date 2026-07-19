@@ -1,4 +1,4 @@
-use iced::widget::{Column, button, column, container, row, scrollable, text, text_input};
+use iced::widget::{Column, button, column, container, pick_list, row, scrollable, text, text_input};
 use iced::{Alignment, Color, Element, Fill, Length};
 use lithic_core::api::structs::ModApi;
 use lithic_core::instance::{GameVersionInstall, InstanceConfig};
@@ -33,6 +33,33 @@ pub struct InstancesView {
    pub form_game_version_id: String,
    pub form_start_params: String,
    pub form_env_vars: String,
+   /// `true` once the user edits the id by hand; while `false` the id is
+   /// derived from the name automatically.
+   pub id_manual: bool,
+   pub show_advanced: bool,
+   pub default_data_dir_preview: String,
+   pub default_mods_dir_preview: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GameVersionOption {
+   id: String,
+   label: String,
+}
+
+impl std::fmt::Display for GameVersionOption {
+   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+      f.write_str(&self.label)
+   }
+}
+
+impl From<&GameVersionInstall> for GameVersionOption {
+   fn from(gv: &GameVersionInstall) -> Self {
+      Self {
+         id: gv.id.clone(),
+         label: format!("{} ({})", gv.version, gv.id),
+      }
+   }
 }
 
 pub fn view<'a>(state: &'a InstancesView, loc: &'a Localizer) -> Element<'a, Message> {
@@ -64,85 +91,115 @@ pub fn view<'a>(state: &'a InstancesView, loc: &'a Localizer) -> Element<'a, Mes
       })
       .unwrap_or_else(|| loc.get("instances-no-active").into_owned());
 
-   let version_buttons: Vec<Element<'_, Message>> = state
-      .game_versions
-      .iter()
-      .map(|gv| {
-         button(text(gv.version.as_str()).size(12))
-            .on_press(Message::InstanceFormGameVersionId(gv.id.clone()))
-            .style(if state.form_game_version_id == gv.id {
-               primary_btn_style
-            } else {
-               ghost_btn_style
-            })
-            .into()
+   let editing = !state.form_id.is_empty() && state.instances.iter().any(|i| i.id == state.form_id);
+   let form_title = if editing {
+      loc.get("instances-form-title-edit")
+   } else {
+      loc.get("instances-form-title-new")
+   };
+
+   let version_field: Element<'_, Message> = if state.game_versions.is_empty() {
+      text(loc.get("instances-no-game-versions"))
+         .size(12)
+         .color(Color {
+            r: 0.65,
+            g: 0.65,
+            b: 0.65,
+            a: 1.0,
+         })
+         .into()
+   } else {
+      let options: Vec<GameVersionOption> = state.game_versions.iter().map(GameVersionOption::from).collect();
+      let selected = options
+         .iter()
+         .find(|o| o.id == state.form_game_version_id)
+         .cloned();
+      pick_list(options, selected, |opt: GameVersionOption| {
+         Message::InstanceFormGameVersionId(opt.id)
       })
-      .collect();
+      .placeholder(loc.get("instances-form-version-placeholder").as_ref())
+      .width(Fill)
+      .into()
+   };
 
    let basics = column![
-      text_input(loc.get("instances-form-id-placeholder").as_ref(), &state.form_id)
-         .on_input(Message::InstanceFormId),
       text_input(
          loc.get("instances-form-name-placeholder").as_ref(),
          &state.form_name
       )
       .on_input(Message::InstanceFormName),
-      text_input(
-         loc.get("instances-form-version-placeholder").as_ref(),
-         &state.form_game_version_id
-      )
-      .on_input(Message::InstanceFormGameVersionId),
-      row(version_buttons).spacing(4),
+      text_input(loc.get("instances-form-id-placeholder").as_ref(), &state.form_id)
+         .on_input(Message::InstanceFormId),
+      version_field,
    ]
    .spacing(6)
    .width(Fill);
 
-   let paths = column![
-      row![
+   let advanced_toggle = button(
+      text(format!(
+         "{} {}",
+         if state.show_advanced { "▾" } else { "▸" },
+         loc.get("instances-form-advanced")
+      ))
+      .size(13),
+   )
+   .on_press(Message::ToggleInstanceAdvanced)
+   .style(ghost_btn_style);
+
+   let advanced: Element<'_, Message> = if state.show_advanced {
+      column![
+         row![
+            text_input(
+               loc.get("instances-form-data-dir-placeholder").as_ref(),
+               &state.form_data_dir
+            )
+            .on_input(Message::InstanceFormDataDir)
+            .width(Fill),
+            button(text(loc.get("instances-browse")))
+               .on_press(Message::PickInstanceDataDir)
+               .style(ghost_btn_style),
+         ]
+         .spacing(6),
+         default_hint(loc, &state.form_data_dir, &state.default_data_dir_preview),
+         row![
+            text_input(
+               loc.get("instances-form-mods-dir-placeholder").as_ref(),
+               &state.form_mods_dir
+            )
+            .on_input(Message::InstanceFormModsDir)
+            .width(Fill),
+            button(text(loc.get("instances-browse")))
+               .on_press(Message::PickInstanceModsDir)
+               .style(ghost_btn_style),
+         ]
+         .spacing(6),
+         default_hint(loc, &state.form_mods_dir, &state.default_mods_dir_preview),
          text_input(
-            loc.get("instances-form-data-dir-placeholder").as_ref(),
-            &state.form_data_dir
+            loc.get("instances-form-start-params-placeholder").as_ref(),
+            &state.form_start_params
          )
-         .on_input(Message::InstanceFormDataDir)
-         .width(Fill),
-         button(text(loc.get("instances-browse")))
-            .on_press(Message::PickInstanceDataDir)
-            .style(ghost_btn_style),
-      ]
-      .spacing(6),
-      row![
+         .on_input(Message::InstanceFormStartParams),
          text_input(
-            loc.get("instances-form-mods-dir-placeholder").as_ref(),
-            &state.form_mods_dir
+            loc.get("instances-form-env-vars-placeholder").as_ref(),
+            &state.form_env_vars
          )
-         .on_input(Message::InstanceFormModsDir)
-         .width(Fill),
-         button(text(loc.get("instances-browse")))
-            .on_press(Message::PickInstanceModsDir)
-            .style(ghost_btn_style),
+         .on_input(Message::InstanceFormEnvVars),
       ]
-      .spacing(6),
-      text_input(
-         loc.get("instances-form-start-params-placeholder").as_ref(),
-         &state.form_start_params
-      )
-      .on_input(Message::InstanceFormStartParams),
-      text_input(
-         loc.get("instances-form-env-vars-placeholder").as_ref(),
-         &state.form_env_vars
-      )
-      .on_input(Message::InstanceFormEnvVars),
-   ]
-   .spacing(6)
-   .width(Fill);
+      .spacing(6)
+      .into()
+   } else {
+      iced::widget::Space::new().into()
+   };
 
    let form = container(
       column![
-         text(loc.get("instances-form-title")).size(14),
-         row![basics, paths].spacing(12),
+         text(form_title).size(14),
+         basics,
+         advanced_toggle,
+         advanced,
          row![
             button(text(loc.get(ids::INSTANCES_SAVE)))
-               .on_press(Message::SaveInstance)
+               .on_press_maybe((!state.form_id.trim().is_empty()).then_some(Message::SaveInstance))
                .style(primary_btn_style),
             button(text(loc.get("instances-reload")))
                .on_press(Message::ReloadInstances)
@@ -261,6 +318,21 @@ pub fn view<'a>(state: &'a InstancesView, loc: &'a Localizer) -> Element<'a, Mes
    } else {
       base.into()
    }
+}
+
+fn default_hint<'a>(loc: &'a Localizer, input: &str, preview: &str) -> Element<'a, Message> {
+   if !input.trim().is_empty() || preview.is_empty() {
+      return iced::widget::Space::new().into();
+   }
+   text(loc.get_with("instances-form-default-path", "path", preview.to_string()))
+      .size(11)
+      .color(Color {
+         r: 0.55,
+         g: 0.55,
+         b: 0.55,
+         a: 1.0,
+      })
+      .into()
 }
 
 fn selected_mod_rows<'a>(state: &'a InstancesView, loc: &'a Localizer) -> Vec<Element<'a, Message>> {

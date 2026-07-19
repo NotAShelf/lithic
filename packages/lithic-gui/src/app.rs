@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use iced::widget::{column, container, row, rule, text};
+use iced::widget::{column, container, row, rule, text, text_editor};
 use iced::{Element, Fill, Subscription, Task, Theme};
 use native_theme_iced::{from_preset, from_system};
 
@@ -86,6 +86,7 @@ pub enum Message {
    BrowseVersionFilterChanged(VersionFilter),
    BrowseVersionFilterLoaded(Result<Vec<ModApi>, String>),
    GameVersionsLoaded(Result<Vec<String>, String>),
+   AvailableGameVersionsLoaded(Result<Vec<String>, String>),
 
    // Instances + launcher
    InstancesLoaded(Result<Vec<lithic_core::instance::InstanceConfig>, String>),
@@ -94,6 +95,7 @@ pub enum Message {
    InstanceFormId(String),
    InstanceDefaultsLoaded((String, String)),
    InstanceFormName(String),
+   ToggleInstanceAdvanced,
    InstanceFormDataDir(String),
    InstanceFormModsDir(String),
    InstanceFormGameVersionId(String),
@@ -137,6 +139,8 @@ pub enum Message {
    InstallGameVersion,
    PollGameInstallProgress,
    ToggleGameInstallLogs,
+   GameInstallLogAction(text_editor::Action),
+   CopyGameInstallLogs,
    RefreshNativeTheme,
    InstallGameVersionDone(Result<String, String>),
    DeleteGameVersion(String),
@@ -176,6 +180,9 @@ pub struct App {
    pub game_versions: GameVersionsView,
    pub settings: SettingsView,
    pub game_install_progress: SharedGameInstallProgress,
+   /// Read-only editor backing the install-log viewer: selectable and
+   /// copyable text, kept in sync with the banner logs on change.
+   pub game_install_log_content: text_editor::Content,
    pub theme: Theme,
    pub loc: Arc<Localizer>,
    /// Cached translated navigation labels (computed once at startup).
@@ -226,6 +233,7 @@ impl App {
          },
          settings: SettingsView::default(),
          game_install_progress: crate::ops::new_game_install_progress(),
+         game_install_log_content: text_editor::Content::new(),
          theme: detect_native_theme(),
          loc,
          nav_labels,
@@ -237,6 +245,10 @@ impl App {
          Task::perform(crate::ops::load_browse(), Message::BrowseLoaded),
          Task::perform(crate::ops::load_favorites(), Message::FavoritesLoaded),
          Task::perform(crate::ops::load_game_versions(), Message::GameVersionsLoaded),
+         Task::perform(
+            crate::ops::load_available_game_versions(),
+            Message::AvailableGameVersionsLoaded,
+         ),
          Task::perform(crate::ops::load_instances(), Message::InstancesLoaded),
          Task::perform(crate::ops::load_active_instance(), Message::ActiveInstanceLoaded),
          Task::perform(
@@ -899,6 +911,21 @@ impl App {
             }
          }
          Message::GameVersionsLoaded(Err(_)) => Task::none(),
+         Message::AvailableGameVersionsLoaded(Ok(versions)) => {
+            // Default the install picker to the newest stable release so the
+            // common case is one click; users can still pick any other
+            // version from the list.
+            if self.game_versions.install_version.trim().is_empty() {
+               let fallback = versions.first();
+               let latest_stable = versions.iter().find(|v| !v.contains("-rc")).or(fallback);
+               if let Some(v) = latest_stable {
+                  self.game_versions.install_version = v.clone();
+               }
+            }
+            self.game_versions.available_versions = versions;
+            Task::none()
+         }
+         Message::AvailableGameVersionsLoaded(Err(_)) => Task::none(),
          Message::BrowseVersionFilterChanged(filter) => {
             self.browse.version_filter = filter.clone();
             match filter {
@@ -976,29 +1003,41 @@ impl App {
             Task::none()
          }
          Message::InstanceFormId(v) => {
-            self.instances.form_id = v.clone();
-            if self.instances.form_data_dir.trim().is_empty()
-               || self.instances.form_mods_dir.trim().is_empty()
-            {
-               Task::perform(
-                  crate::ops::default_instance_paths(v),
-                  Message::InstanceDefaultsLoaded,
-               )
-            } else {
-               Task::none()
+            // A manual id edit means the name no longer drives the id.
+            self.instances.id_manual = true;
+            if v == self.instances.form_id {
+               return Task::none();
             }
+            self.instances.form_id = v.clone();
+            Task::perform(
+               crate::ops::default_instance_paths(v),
+               Message::InstanceDefaultsLoaded,
+            )
          }
          Message::InstanceDefaultsLoaded((data_dir, mods_dir)) => {
-            if self.instances.form_data_dir.trim().is_empty() {
-               self.instances.form_data_dir = data_dir;
-            }
-            if self.instances.form_mods_dir.trim().is_empty() {
-               self.instances.form_mods_dir = mods_dir;
-            }
+            // Defaults are shown as hints under empty path fields; the same
+            // derivation happens server-side in `upsert_instance` at save.
+            self.instances.default_data_dir_preview = data_dir;
+            self.instances.default_mods_dir_preview = mods_dir;
             Task::none()
          }
          Message::InstanceFormName(v) => {
-            self.instances.form_name = v;
+            self.instances.form_name = v.clone();
+            if self.instances.id_manual {
+               return Task::none();
+            }
+            let slug = crate::ops::slugify_instance_id(&v);
+            if slug == self.instances.form_id {
+               return Task::none();
+            }
+            self.instances.form_id = slug.clone();
+            Task::perform(
+               crate::ops::default_instance_paths(slug),
+               Message::InstanceDefaultsLoaded,
+            )
+         }
+         Message::ToggleInstanceAdvanced => {
+            self.instances.show_advanced = !self.instances.show_advanced;
             Task::none()
          }
          Message::InstanceFormDataDir(v) => {
@@ -1106,6 +1145,10 @@ impl App {
                self.instances.form_game_version_id = inst.game_version_id.clone();
                self.instances.form_start_params = inst.start_params.clone();
                self.instances.form_env_vars = inst.env_vars.clone();
+               // Existing instances carry explicit paths; surface them
+               // instead of hiding them behind the collapsed section.
+               self.instances.id_manual = true;
+               self.instances.show_advanced = true;
             }
             Task::none()
          }
@@ -1119,6 +1162,9 @@ impl App {
             self.instances.form_env_vars.clear();
             self.instances.selected_mod_ids.clear();
             self.instances.mod_search.clear();
+            self.instances.id_manual = false;
+            self.instances.default_data_dir_preview.clear();
+            self.instances.default_mods_dir_preview.clear();
             Task::none()
          }
          Message::SaveInstance => Task::perform(
@@ -1178,12 +1224,32 @@ impl App {
          // --- Installed game versions ---
          Message::ReloadGameVersions => {
             self.game_versions.loading = true;
-            Task::perform(
-               crate::ops::load_game_version_installs(),
-               Message::InstalledGameVersionsLoaded,
-            )
+            Task::batch([
+               Task::perform(
+                  crate::ops::load_game_version_installs(),
+                  Message::InstalledGameVersionsLoaded,
+               ),
+               Task::perform(
+                  crate::ops::load_available_game_versions(),
+                  Message::AvailableGameVersionsLoaded,
+               ),
+            ])
          }
          Message::InstalledGameVersionsLoaded(Ok(versions)) => {
+            // Pre-select a sensible game version for a fresh instance form:
+            // the pinned version from Settings when installed, else the
+            // first entry. A manual id edit implies the user is managing
+            // the form themselves, so don't override their selection.
+            if self.instances.form_game_version_id.is_empty() && !self.instances.id_manual {
+               let pinned = &self.settings.pinned_game_version;
+               let default = versions
+                  .iter()
+                  .find(|gv| gv.id == *pinned || gv.version == *pinned)
+                  .or_else(|| versions.first());
+               if let Some(gv) = default {
+                  self.instances.form_game_version_id = gv.id.clone();
+               }
+            }
             self.instances.game_versions = versions.clone();
             self.game_versions.versions = versions;
             self.game_versions.loading = false;
@@ -1283,9 +1349,30 @@ impl App {
          }
          Message::PollGameInstallProgress => {
             if let Ok(progress) = self.game_install_progress.lock() {
+               // Rebuild the log viewer only when the lines actually change;
+               // rebuilding on every poll would reset the user's selection.
+               if progress.logs != self.game_versions.install_banner.logs {
+                  self.game_install_log_content = text_editor::Content::with_text(&progress.logs.join("\n"));
+               }
                self.game_versions.install_banner = progress.clone();
             }
             Task::none()
+         }
+         Message::GameInstallLogAction(action) => {
+            // Read-only: drop edits, but keep selection/scroll actions so the
+            // user can select and Ctrl+C the logs.
+            if !action.is_edit() {
+               self.game_install_log_content.perform(action);
+            }
+            Task::none()
+         }
+         Message::CopyGameInstallLogs => {
+            let logs = self.game_versions.install_banner.logs.join("\n");
+            if logs.is_empty() {
+               Task::none()
+            } else {
+               iced::clipboard::write(logs)
+            }
          }
          Message::RefreshNativeTheme => {
             if self.settings.theme_mode == ThemeModeOption::System {
@@ -1408,7 +1495,7 @@ impl App {
          View::Browse => browse::view(&self.browse, loc),
          View::Installed => installed::view(&self.installed, &self.settings.pinned_game_version, loc),
          View::Instances => instances::view(&self.instances, loc),
-         View::GameVersions => game_versions::view(&self.game_versions, loc),
+         View::GameVersions => game_versions::view(&self.game_versions, &self.game_install_log_content, loc),
          View::Settings => settings::view(&self.settings, loc),
       };
 

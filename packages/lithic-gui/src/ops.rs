@@ -436,33 +436,70 @@ pub async fn create_pack(
 }
 
 pub async fn load_game_versions() -> Result<Vec<String>, String> {
+   Ok(unique_minor_versions(&load_raw_game_versions().await?))
+}
+
+/// Full version strings (e.g. `1.20.4-rc.2`), newest first, for the
+/// install-picker in the Game Versions view.
+pub async fn load_available_game_versions() -> Result<Vec<String>, String> {
+   let mut raw = load_raw_game_versions().await?;
+   raw.sort_by(
+      |v1, v2| match (lenient_semver::parse(v1), lenient_semver::parse(v2)) {
+         (Ok(a), Ok(b)) => a.cmp(&b),
+         (Ok(_), Err(_)) => std::cmp::Ordering::Greater,
+         (Err(_), Ok(_)) => std::cmp::Ordering::Less,
+         (Err(_), Err(_)) => std::cmp::Ordering::Equal,
+      },
+   );
+   raw.reverse();
+   Ok(raw)
+}
+
+async fn load_raw_game_versions() -> Result<Vec<String>, String> {
    let path = Config::get_path().join(FILE_GAME_VERSION_SYNC);
 
-   let raw: Vec<String> = if path.exists() {
-      parse_json_file::<GameVersionSync>(&path)
+   if path.exists() {
+      let cached = parse_json_file::<GameVersionSync>(&path)
          .await
          .map(|gvs| gvs.game_versions)
-         .unwrap_or_default()
-   } else {
-      let client = ApiClient::new();
-      let set = client.fetch_game_versions().await.map_err(err)?;
-      let mut sorted: Vec<String> = set.into_iter().collect();
-      sorted.sort();
-      let gvs = GameVersionSync {
-         game_versions: sorted.clone(),
-         last_sync: get_current_time(),
-      };
-      let json = prettify(&gvs, "game versions").map_err(err)?;
-      // Cache write failure is non-fatal (we still have `sorted` in memory),
-      // but it must not silently masquerade as success: a stale cache will
-      // mislead future loads. Log so it surfaces in `--verbose` runs.
-      if let Err(e) = write_json_file(&path, json, &Config::get_path()).await {
-         tracing::warn!("failed to persist game-version cache to {}: {e}", path.display());
-      }
-      sorted
-   };
+         .unwrap_or_default();
+      return Ok(cached);
+   }
 
-   Ok(unique_minor_versions(&raw))
+   let client = ApiClient::new();
+   let set = client.fetch_game_versions().await.map_err(err)?;
+   let mut sorted: Vec<String> = set.into_iter().collect();
+   sorted.sort();
+   let gvs = GameVersionSync {
+      game_versions: sorted.clone(),
+      last_sync: get_current_time(),
+   };
+   let json = prettify(&gvs, "game versions").map_err(err)?;
+   // Cache write failure is non-fatal (we still have `sorted` in memory),
+   // but it must not silently masquerade as success: a stale cache will
+   // mislead future loads. Log so it surfaces in `--verbose` runs.
+   if let Err(e) = write_json_file(&path, json, &Config::get_path()).await {
+      tracing::warn!("failed to persist game-version cache to {}: {e}", path.display());
+   }
+   Ok(sorted)
+}
+
+/// Derives an instance id from a display name: lowercase ASCII
+/// alphanumeric runs joined by single dashes. Matches the sanitiser in
+/// [`default_instance_paths`] so derived paths stay consistent.
+pub fn slugify_instance_id(name: &str) -> String {
+   let mut out = String::with_capacity(name.len());
+   for c in name.trim().chars() {
+      if c.is_ascii_alphanumeric() {
+         out.push(c.to_ascii_lowercase());
+      } else if !out.is_empty() && !out.ends_with('-') {
+         out.push('-');
+      }
+   }
+   while out.ends_with('-') {
+      out.pop();
+   }
+   out
 }
 
 pub async fn fetch_versioned_browse(
