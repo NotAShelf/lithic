@@ -15,24 +15,18 @@
   pname = "lithic";
   version = cargoTOML.version;
 
+  runtimeInputs = [
+    libxkbcommon
+    vulkan-loader
+    wayland
+  ];
+
+  buildInputs = runtimeInputs ++ [openssl.dev];
   nativeBuildInputs = [
     clang
     mold
     pkg-config
     makeWrapper
-  ];
-
-  buildInputs = [
-    openssl
-    libxkbcommon
-    wayland
-    vulkan-loader
-  ];
-
-  runtimeInputs = [
-    libxkbcommon
-    vulkan-loader
-    wayland
   ];
 
   depsSrc = craneLib.cleanCargoSource ../.;
@@ -43,7 +37,7 @@
     src = depsSrc;
 
     env = {
-      LIBCLANG_PATH = "${libclang.lib}/lib";
+      LIBCLANG_PATH = lib.makeLibraryPath [libclang.lib];
     };
   };
 
