@@ -1,5 +1,5 @@
 use std::fs::{self, File, OpenOptions};
-use std::io::Write;
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -197,11 +197,11 @@ pub fn move_path(from: &Path, to: &Path) -> Result<()> {
    }
    match fs::rename(from, to) {
       Ok(()) => Ok(()),
-      Err(_) if from.is_dir() => {
+      Err(e) if e.kind() == ErrorKind::CrossesDevices && from.is_dir() => {
          copy_dir(from, to, &|_| false)?;
          remove_path(from)
       }
-      Err(_) => {
+      Err(e) if e.kind() == ErrorKind::CrossesDevices => {
          fs::copy(from, to).at(from)?;
          remove_path(from)
       }
@@ -347,4 +347,19 @@ mod tests {
       assert!(!dst.join("Logs").exists());
    }
 
+   #[test]
+   fn move_does_not_merge_directories_when_rename_fails() {
+      let dir = tempfile::tempdir().unwrap();
+      let src = dir.path().join("src");
+      let dst = dir.path().join("dst");
+      fs::create_dir(&src).unwrap();
+      fs::create_dir(&dst).unwrap();
+      fs::write(src.join("source"), "keep").unwrap();
+      fs::write(dst.join("existing"), "keep").unwrap();
+
+      assert!(move_path(&src, &dst).is_err());
+      assert!(src.join("source").exists());
+      assert!(!dst.join("source").exists());
+      assert!(dst.join("existing").exists());
+   }
 }
