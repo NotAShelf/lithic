@@ -11,12 +11,20 @@
   libxkbcommon,
   vulkan-loader,
   wayland,
+  libx11,
+  libxcursor,
+  libxi,
+  libxrandr,
 }: let
   lithicPkg = self.packages.${stdenv.hostPlatform.system}.lithic;
   runtimeInputs = lib.makeLibraryPath [
     libxkbcommon
     vulkan-loader
     wayland
+    libx11
+    libxcursor
+    libxi
+    libxrandr
   ];
 in
   mkShell {
