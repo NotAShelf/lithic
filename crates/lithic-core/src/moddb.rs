@@ -1,4 +1,4 @@
-//! Client for the Vintage Story ModDB (`mods.vintagestory.at/api`).
+//! Client for the Vintage Story `ModDB` (`mods.vintagestory.at/api`).
 //!
 //! The API answers HTTP 200 even for errors and reports the real outcome in a
 //! `statuscode` string inside the body, so every response is checked for that
@@ -6,6 +6,11 @@
 //! endpoints; the wire types below accept all shapes seen in live responses.
 
 use std::path::Path;
+use std::result;
+use std::time::Duration;
+
+use html2text::config::with_decorator;
+use html2text::render::TrivialDecorator;
 
 use serde::de::{DeserializeOwned, Deserializer};
 use serde::{Deserialize, Serialize};
@@ -20,7 +25,7 @@ pub const API_BASE: &str = "https://mods.vintagestory.at/api";
 pub const SITE_BASE: &str = "https://mods.vintagestory.at";
 
 /// One entry of `/api/mods`.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModSummary {
    #[serde(rename = "modid", default, deserialize_with = "int")]
    pub id: i64,
@@ -57,17 +62,19 @@ pub struct ModSummary {
 }
 
 impl ModSummary {
+   #[must_use]
    pub fn page_url(&self) -> String {
       page_url(self.id, self.url_alias.as_deref())
    }
 
+   #[must_use]
    pub fn has_mod_id(&self, mod_id: &str) -> bool {
       self.mod_ids.iter().any(|m| m.eq_ignore_ascii_case(mod_id))
    }
 }
 
 /// `/api/mod/{id}`.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModDetails {
    #[serde(rename = "modid", default, deserialize_with = "int")]
    pub id: i64,
@@ -117,15 +124,18 @@ pub struct ModDetails {
 }
 
 impl ModDetails {
+   #[must_use]
    pub fn page_url(&self) -> String {
       page_url(self.id, self.url_alias.as_deref())
    }
 
    /// The mod id string, taken from the newest release that states one.
+   #[must_use]
    pub fn mod_id(&self) -> Option<&str> {
       self.releases.iter().find_map(|r| r.mod_id.as_deref())
    }
 
+   #[must_use]
    pub fn release(&self, mod_version: &str) -> Option<&Release> {
       self.releases.iter().find(|r| {
          r.version
@@ -135,7 +145,7 @@ impl ModDetails {
    }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Release {
    #[serde(rename = "releaseid", default, deserialize_with = "int")]
    pub id: i64,
@@ -190,7 +200,7 @@ impl Release {
    }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Screenshot {
    #[serde(rename = "mainfile", default, deserialize_with = "opt_text")]
    pub url: Option<String>,
@@ -200,7 +210,7 @@ pub struct Screenshot {
    pub filename: Option<String>,
 }
 
-/// A game version as the ModDB tags it. `tag_id` is what the mod list filter
+/// A game version as the `ModDB` tags it. `tag_id` is what the mod list filter
 /// expects.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GameVersionTag {
@@ -214,11 +224,12 @@ pub struct Tag {
    pub name: String,
 }
 
+#[must_use]
 pub fn page_url(id: i64, alias: Option<&str>) -> String {
-   match alias.filter(|a| !a.is_empty()) {
-      Some(alias) => format!("{SITE_BASE}/{alias}"),
-      None => format!("{SITE_BASE}/show/mod/{id}"),
-   }
+   alias.filter(|a| !a.is_empty()).map_or_else(
+      || format!("{SITE_BASE}/show/mod/{id}"),
+      |alias| format!("{SITE_BASE}/{alias}"),
+   )
 }
 
 /// Server-side filters for `/api/mods`.
@@ -254,6 +265,7 @@ pub struct ModDb {
 }
 
 impl ModDb {
+   #[must_use]
    pub fn new(http: Http) -> Self {
       Self::with_base(http, API_BASE)
    }
@@ -266,12 +278,17 @@ impl ModDb {
       }
    }
 
+   /// # Errors
+   /// Returns an error if the request fails or the response cannot be decoded.
    pub async fn mods(&self, query: &Query) -> Result<Vec<ModSummary>> {
       let body = self.get("mods", &query.to_url(&self.base)).await?;
       decode_field(body, "mods")
    }
 
    /// Looks a mod up by numeric id, url alias, or mod id string.
+   ///
+   /// # Errors
+   /// Returns an error for an empty id, an unsuccessful request, or an invalid response.
    pub async fn mod_details(&self, id: &str) -> Result<ModDetails> {
       let id = id.trim();
       if id.is_empty() {
@@ -285,6 +302,8 @@ impl ModDb {
       }
    }
 
+   /// # Errors
+   /// Returns an error if the request fails or the version list is invalid.
    pub async fn game_versions(&self) -> Result<Vec<GameVersionTag>> {
       #[derive(Deserialize)]
       struct Raw {
@@ -308,6 +327,8 @@ impl ModDb {
       Ok(out)
    }
 
+   /// # Errors
+   /// Returns an error if the request fails or the tag list is invalid.
    pub async fn tags(&self) -> Result<Vec<Tag>> {
       #[derive(Deserialize)]
       struct Raw {
@@ -363,20 +384,27 @@ pub struct ModIndex {
 }
 
 impl ModIndex {
+   #[must_use]
    pub fn age_hours(&self) -> f64 {
-      (now_ms() - self.fetched_at) as f64 / 3_600_000.0
+      let elapsed = now_ms() - self.fetched_at;
+      let hours = Duration::from_millis(elapsed.unsigned_abs()).as_secs_f64() / 3600.0;
+      if elapsed < 0 { -hours } else { hours }
    }
 
+   #[must_use]
    pub fn load_cached(path: &Path) -> Option<Self> {
       fsutil::read_json(path).ok().flatten()
    }
 
+   /// # Errors
+   /// Returns an error if serialization or writing the cache fails.
    pub fn save(&self, path: &Path) -> Result<()> {
       let bytes = serde_json::to_vec(self).map_err(|e| Error::parse("mod index", e))?;
       fsutil::write_atomic(path, &bytes)
    }
 
    /// Finds a mod by its mod id string (what `modinfo.json` calls `modid`).
+   #[must_use]
    pub fn by_mod_id(&self, mod_id: &str) -> Option<&ModSummary> {
       self.mods.iter().find(|m| m.has_mod_id(mod_id)).or_else(|| {
          self.mods.iter().find(|m| {
@@ -387,10 +415,12 @@ impl ModIndex {
       })
    }
 
+   #[must_use]
    pub fn by_id(&self, id: i64) -> Option<&ModSummary> {
       self.mods.iter().find(|m| m.id == id)
    }
 
+   #[must_use]
    pub fn search(&self, query: &str, sort: Sort) -> Vec<&ModSummary> {
       search(&self.mods, query, sort)
    }
@@ -411,6 +441,7 @@ pub enum Sort {
 
 /// Ranks mods against free text. Every whitespace-separated word must appear in
 /// the name, mod id, author, summary, or tags.
+#[must_use]
 pub fn search<'a>(mods: &'a [ModSummary], query: &str, sort: Sort) -> Vec<&'a ModSummary> {
    rank(mods, query, sort).into_iter().map(|i| &mods[i]).collect()
 }
@@ -472,16 +503,18 @@ pub fn rank(mods: &[ModSummary], query: &str, sort: Sort) -> Vec<usize> {
 
 /// HTML without any markup, for interfaces that do their own wrapping and
 /// styling.
+#[must_use]
 pub fn html_to_plain(html: &str) -> String {
-   html2text::config::with_decorator(html2text::render::TrivialDecorator::new())
+   with_decorator(TrivialDecorator::new())
       .string_from_read(html.as_bytes(), 10_000)
       .unwrap_or_else(|_| html.to_string())
       .trim()
       .to_string()
 }
 
-/// HTML from the ModDB (descriptions, changelogs) as text for a terminal,
+/// HTML from the `ModDB` (descriptions, changelogs) as text for a terminal,
 /// with light Markdown-style markup.
+#[must_use]
 pub fn html_to_text(html: &str, width: usize) -> String {
    html2text::from_read(html.as_bytes(), width.max(20))
       .unwrap_or_else(|_| html.to_string())
@@ -493,19 +526,18 @@ fn percent_decode(s: &str) -> String {
    let bytes = s.as_bytes();
    let mut out = Vec::with_capacity(bytes.len());
    let mut i = 0;
-   let hex = |b: u8| (b as char).to_digit(16).map(|d| d as u8);
+   let hex = |b: u8| (b as char).to_digit(16).and_then(|d| u8::try_from(d).ok());
    while i < bytes.len() {
       match bytes[i] {
-         b'%' if i + 2 < bytes.len() => match (hex(bytes[i + 1]), hex(bytes[i + 2])) {
-            (Some(hi), Some(lo)) => {
-               out.push(hi << 4 | lo);
+         b'%' if i + 2 < bytes.len() => {
+            if let (Some(hi), Some(lo)) = (hex(bytes[i + 1]), hex(bytes[i + 2])) {
+               out.push((hi << 4) | lo);
                i += 3;
-            }
-            _ => {
+            } else {
                out.push(b'%');
                i += 1;
             }
-         },
+         }
          b'+' => {
             out.push(b' ');
             i += 1;
@@ -519,16 +551,28 @@ fn percent_decode(s: &str) -> String {
    String::from_utf8_lossy(&out).into_owned()
 }
 
-fn int<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<i64, D::Error> {
+fn int<'de, D: Deserializer<'de>>(d: D) -> result::Result<i64, D::Error> {
    Ok(match Value::deserialize(d)? {
-      Value::Number(n) => n.as_i64().or_else(|| n.as_f64().map(|f| f as i64)).unwrap_or(0),
+      Value::Number(n) => n
+         .as_i64()
+         .or_else(|| {
+            n.as_f64().map(|f| {
+               #[expect(
+                  clippy::cast_possible_truncation,
+                  reason = "ModDB numeric fields accept floating point JSON and truncate to integer"
+               )]
+               let integer = f as i64;
+               integer
+            })
+         })
+         .unwrap_or(0),
       Value::String(s) => s.trim().parse().unwrap_or(0),
       Value::Bool(b) => i64::from(b),
       _ => 0,
    })
 }
 
-fn opt_text<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Option<String>, D::Error> {
+fn opt_text<'de, D: Deserializer<'de>>(d: D) -> result::Result<Option<String>, D::Error> {
    Ok(match Value::deserialize(d)? {
       Value::String(s) => Some(s.trim().to_string()).filter(|s| !s.is_empty()),
       Value::Number(n) => Some(n.to_string()),
@@ -537,11 +581,11 @@ fn opt_text<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Option<Strin
    })
 }
 
-fn text<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<String, D::Error> {
+fn text<'de, D: Deserializer<'de>>(d: D) -> result::Result<String, D::Error> {
    opt_text(d).map(Option::unwrap_or_default)
 }
 
-fn strings<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Vec<String>, D::Error> {
+fn strings<'de, D: Deserializer<'de>>(d: D) -> result::Result<Vec<String>, D::Error> {
    Ok(match Value::deserialize(d)? {
       Value::Array(items) => items
          .into_iter()
@@ -556,7 +600,7 @@ fn strings<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Vec<String>, 
    })
 }
 
-fn list<'de, D, T>(d: D) -> std::result::Result<Vec<T>, D::Error>
+fn list<'de, D, T>(d: D) -> result::Result<Vec<T>, D::Error>
 where
    D: Deserializer<'de>,
    T: DeserializeOwned,
@@ -571,6 +615,10 @@ where
 }
 
 #[cfg(test)]
+#[expect(
+   clippy::unwrap_used,
+   reason = "test setup and assertions intentionally fail on error"
+)]
 mod tests {
    use super::*;
 
