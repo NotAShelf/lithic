@@ -6,7 +6,9 @@ use iced::{Center, Element, Fill, Task};
 use lithic_core::Instance;
 use lithic_core::instance::NewInstance;
 use lithic_core::mods::InstallOptions;
+use lithic_core::paths::stock_game_data_dirs;
 
+use super::{format_duration, format_time};
 use crate::app::{Message as AppMessage, OpKind, Outcome, Page, Shared, Summary};
 use crate::i18n::{t, t1, t2};
 use crate::style::{self, Tone};
@@ -50,13 +52,12 @@ pub fn game_choices(shared: &Shared) -> Vec<GameChoice> {
             .releases
             .iter()
             .filter(|r| !r.is_prerelease())
-            .filter(|r| !out.iter().any(|c| c.version == r.version))
+            .filter(|r| !shared.installs.iter().any(|i| i.version == r.version))
             .take(12)
             .map(|r| GameChoice {
                version: r.version.clone(),
                installed: false,
-            })
-            .collect::<Vec<_>>(),
+            }),
       );
    }
    out
@@ -169,7 +170,7 @@ impl State {
             self.create = None;
             let mut tasks = vec![
                Task::done(AppMessage::Reload),
-               Task::done(AppMessage::Navigate(Page::Instance(instance.id.clone()))),
+               Task::done(AppMessage::Navigate(Page::Instance(instance.id))),
             ];
             if let Some(version) = needs_game {
                tasks.push(shared.start_op(
@@ -211,7 +212,7 @@ impl State {
                   .import_pack(&path, None, &opts)
                   .await
                   .map(|r| Outcome::Imported {
-                     instance: r.instance.id.clone(),
+                     instance: r.instance.id,
                      summary: Summary::from(&r.install),
                   })
                   .map_err(|e| e.to_string())
@@ -254,7 +255,7 @@ impl State {
       let content: Element<Message> = if !shared.loaded {
          widget::loading(t("loading"))
       } else if shared.instances.is_empty() {
-         let adopt = lithic_core::paths::stock_game_data_dirs().into_iter().next();
+         let adopt = stock_game_data_dirs().into_iter().next();
          let mut buttons = row![
             button(text(t("instances-new")))
                .padding([8, 16])
@@ -296,21 +297,23 @@ fn instance_row<'a>(instance: &'a Instance, shared: &'a Shared) -> Element<'a, M
    let selected = shared.settings.active_instance.as_deref() == Some(id.as_str());
    let mods = shared.mod_counts.get(&id).copied().unwrap_or(0);
 
-   let mut details = vec![match &instance.game_version {
-      Some(v) => t1("instances-game", "version", v.clone()),
-      None => t("instances-no-game"),
-   }];
+   let mut details = vec![instance.game_version.as_ref().map_or_else(
+      || t("instances-no-game"),
+      |v| t1("instances-game", "version", v.clone()),
+   )];
    details.push(t1("mods-count", "count", mods));
-   details.push(match instance.stats.last_played_at {
-      Some(ms) => t2(
-         "instances-played",
-         "when",
-         crate::screen::format_time(ms),
-         "total",
-         crate::screen::format_duration(instance.stats.play_time_ms),
-      ),
-      None => t("instances-never-played"),
-   });
+   details.push(instance.stats.last_played_at.map_or_else(
+      || t("instances-never-played"),
+      |ms| {
+         t2(
+            "instances-played",
+            "when",
+            format_time(ms),
+            "total",
+            format_duration(instance.stats.play_time_ms),
+         )
+      },
+   ));
 
    let mut title = row![text(&instance.name).size(17).font(widget::bold())]
       .spacing(8)
@@ -435,12 +438,18 @@ fn create_dialog<'a>(form: &'a CreateForm, shared: &'a Shared) -> Element<'a, Me
 }
 
 #[cfg(test)]
+#[expect(
+   clippy::unwrap_used,
+   reason = "test setup and assertions intentionally fail on error"
+)]
 mod tests {
    use super::*;
+   use lithic_core::game::{Install, Manifest};
+   use lithic_core::{Lithic, Paths};
 
    fn shared() -> (tempfile::TempDir, Shared) {
       let dir = tempfile::tempdir().unwrap();
-      let lithic = lithic_core::Lithic::new(lithic_core::Paths::rooted(dir.path())).unwrap();
+      let lithic = Lithic::new(Paths::rooted(dir.path())).unwrap();
       (dir, Shared::new(lithic))
    }
 
@@ -466,12 +475,12 @@ mod tests {
    #[test]
    fn installed_versions_come_first() {
       let (_d, mut shared) = shared();
-      shared.installs.push(lithic_core::game::Install {
+      shared.installs.push(Install {
          version: "1.21.5".into(),
          path: "/x".into(),
          managed: true,
       });
-      let manifest = lithic_core::game::Manifest::parse(
+      let manifest = Manifest::parse(
          r#"{"1.22.7": {"linux": {"filename": "a", "urls": {"cdn": "u"}}},
              "1.21.5": {"linux": {"filename": "b", "urls": {"cdn": "u"}}},
              "1.22.8-rc.1": {"linux": {"filename": "c", "urls": {"cdn": "u"}}}}"#,
