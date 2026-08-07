@@ -1,16 +1,18 @@
 use std::collections::BTreeMap;
 use std::fmt;
+use std::fs;
 use std::path::PathBuf;
 
 use iced::widget::{
    button, checkbox, column, pick_list, progress_bar, row, scrollable, space, text, text_editor, text_input,
    toggler,
 };
-use iced::{Center, Element, Fill, Task};
+use iced::{Center, Element, Fill, Font, Task};
+use lithic_core::fsutil::slugify;
 use lithic_core::launch::read_tail;
 use lithic_core::mods::{self, InstallOptions, InstalledMod, ModRef, Problem, Update};
 use lithic_core::pack::ExportOptions;
-use lithic_core::{Cancel, Instance};
+use lithic_core::{Cancel, Instance, Lithic, Result as CoreResult};
 
 use super::instances::{GameChoice, game_choices};
 use super::{describe_problem, format_duration, format_time, installable_fix};
@@ -44,11 +46,9 @@ pub enum AccountChoice {
 impl fmt::Display for AccountChoice {
    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
       match self {
-         AccountChoice::Active(Some(name)) => {
-            f.write_str(&t1("instance-account-active", "name", name.clone()))
-         }
-         AccountChoice::Active(None) => f.write_str(&t("instance-account-none")),
-         AccountChoice::Account { name, .. } => f.write_str(name),
+         Self::Active(Some(name)) => f.write_str(&t1("instance-account-active", "name", name.clone())),
+         Self::Active(None) => f.write_str(&t("instance-account-none")),
+         Self::Account { name, .. } => f.write_str(name),
       }
    }
 }
@@ -154,20 +154,22 @@ struct Parsed {
 }
 
 fn account_choice(uid: Option<&str>, shared: &Shared) -> AccountChoice {
-   match uid.and_then(|u| shared.accounts.get(u)) {
-      Some(a) => AccountChoice::Account {
+   uid.and_then(|u| shared.accounts.get(u)).map_or_else(
+      || {
+         AccountChoice::Active(
+            shared
+               .accounts
+               .active
+               .as_deref()
+               .and_then(|u| shared.accounts.get(u))
+               .map(|a| a.playername.clone()),
+         )
+      },
+      |a| AccountChoice::Account {
          uid: a.uid.clone(),
          name: a.playername.clone(),
       },
-      None => AccountChoice::Active(
-         shared
-            .accounts
-            .active
-            .as_deref()
-            .and_then(|u| shared.accounts.get(u))
-            .map(|a| a.playername.clone()),
-      ),
-   }
+   )
 }
 
 #[derive(Debug, Default)]
@@ -356,7 +358,7 @@ impl State {
 
    fn blocking_change<F>(&self, shared: &Shared, f: F) -> Task<AppMessage>
    where
-      F: FnOnce(&lithic_core::Lithic, &Instance) -> lithic_core::Result<()> + Send + 'static,
+      F: FnOnce(&Lithic, &Instance) -> CoreResult<()> + Send + 'static,
    {
       let lithic = shared.lithic.clone();
       let id = self.id.clone();
@@ -461,7 +463,7 @@ impl State {
                let name = installed
                   .iter()
                   .find(|m| m.mod_id() == mod_id)
-                  .map_or(mod_id.clone(), |m| m.display_name().to_string());
+                  .map_or_else(|| mod_id.clone(), |m| m.display_name().to_string());
                let dependents = installed
                   .iter()
                   .filter(|m| m.mod_id() != mod_id && m.info.dependencies.contains_key(&mod_id))
@@ -500,7 +502,7 @@ impl State {
                   Folder::Mods => i.mods_dir(),
                   Folder::Logs => i.game_logs_dir(),
                };
-               let _ = std::fs::create_dir_all(&path);
+               let _ = fs::create_dir_all(&path);
                return Task::done(AppMessage::Open(path.display().to_string()));
             }
          }
@@ -735,7 +737,7 @@ impl State {
             self.confirm = Some(Confirm::Export { config, bundle_all });
             let file = shared
                .instance(&self.id)
-               .map(|i| lithic_core::fsutil::slugify(&i.name))
+               .map(|i| slugify(&i.name))
                .filter(|s| !s.is_empty())
                .unwrap_or_else(|| self.id.clone());
             Task::future(save_pack(
@@ -766,7 +768,7 @@ impl State {
       match &self.confirm {
          Some(confirm) => widget::modal(
             content,
-            self.confirm_view(confirm, instance),
+            Self::confirm_view(confirm, instance),
             Message::CloseConfirm,
          ),
          None => content.into(),
@@ -797,16 +799,18 @@ impl State {
          Some(v) => t1("instance-game-not-installed", "version", v.clone()),
          None => t("instances-no-game"),
       };
-      let played = match instance.stats.last_played_at {
-         Some(ms) => t2(
-            "instances-played",
-            "when",
-            format_time(ms),
-            "total",
-            format_duration(instance.stats.play_time_ms),
-         ),
-         None => t("instances-never-played"),
-      };
+      let played = instance.stats.last_played_at.map_or_else(
+         || t("instances-never-played"),
+         |ms| {
+            t2(
+               "instances-played",
+               "when",
+               format_time(ms),
+               "total",
+               format_duration(instance.stats.play_time_ms),
+            )
+         },
+      );
 
       let play: Element<Message> = if running {
          button(text(t("instances-stop")))
@@ -914,10 +918,9 @@ impl State {
       let mut col = column![toolbar].spacing(12);
 
       if let Some(b) = busy {
-         let bar: Element<Message> = match b.fraction() {
-            Some(f) => progress_bar(0.0..=1.0, f).girth(6).into(),
-            None => space().into(),
-         };
+         let bar: Element<Message> = b
+            .fraction()
+            .map_or_else(|| space().into(), |f| progress_bar(0.0..=1.0, f).girth(6).into());
          col = col.push(widget::notice(
             column![
                row![
@@ -1007,7 +1010,7 @@ impl State {
       } else {
          text_editor(&self.logs.content)
             .on_action(Message::LogAction)
-            .font(iced::Font::MONOSPACE)
+            .font(Font::MONOSPACE)
             .size(12)
             .height(Fill)
             .into()
@@ -1135,7 +1138,7 @@ impl State {
       scrollable(widget::card(form.max_width(720))).height(Fill).into()
    }
 
-   fn confirm_view<'a>(&'a self, confirm: &'a Confirm, instance: &'a Instance) -> Element<'a, Message> {
+   fn confirm_view<'a>(confirm: &'a Confirm, instance: &'a Instance) -> Element<'a, Message> {
       match confirm {
          Confirm::RemoveMod { name, dependents, .. } => {
             let body = if dependents.is_empty() {
@@ -1343,13 +1346,21 @@ impl fmt::Display for LogFile {
 }
 
 #[cfg(test)]
+#[expect(
+   clippy::unwrap_used,
+   clippy::panic,
+   reason = "test setup and assertions intentionally fail on error"
+)]
 mod tests {
    use super::*;
+   use lithic_core::Paths;
    use lithic_core::instance::NewInstance;
+   use lithic_core::modinfo::{Format, ModInfo};
+   use lithic_core::mods::LockEntry;
 
    fn setup() -> (tempfile::TempDir, Shared, String) {
       let dir = tempfile::tempdir().unwrap();
-      let lithic = lithic_core::Lithic::new(lithic_core::Paths::rooted(dir.path())).unwrap();
+      let lithic = Lithic::new(Paths::rooted(dir.path())).unwrap();
       let instance = lithic
          .create_instance(NewInstance {
             name: "Test".into(),
@@ -1391,17 +1402,17 @@ mod tests {
       let (_d, mut shared, id) = setup();
       let mut state = State::new(&id, &shared);
       let lib = InstalledMod {
-         info: lithic_core::modinfo::ModInfo {
+         info: ModInfo {
             mod_id: "lib".into(),
             name: "Lib".into(),
             ..Default::default()
          },
          path: "/x/lib.zip".into(),
          file_name: "lib.zip".into(),
-         format: lithic_core::modinfo::Format::Zip,
+         format: Format::Zip,
          enabled: true,
          error: None,
-         lock: Default::default(),
+         lock: LockEntry::default(),
       };
       let mut app = lib.clone();
       app.info.mod_id = "app".into();
