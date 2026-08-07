@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use comfy_table::Cell;
 use lithic_core::instance::NewInstance;
 use lithic_core::paths;
-use lithic_core::Instance;
+use lithic_core::{Error, Instance};
 use serde::Serialize;
 
 use super::{resolve_game_version, warn_if_not_installed};
@@ -161,6 +161,18 @@ fn show(ctx: &Ctx, id: Option<&str>) -> Result {
       return ctx.ui.print_json(&v);
    }
 
+   let accounts = ctx.lithic.accounts()?;
+   let account = accounts
+      .for_instance(instance.account.as_deref())
+      .map(|a| {
+         let how = if instance.account.as_deref() == Some(a.uid.as_str()) {
+            ""
+         } else {
+            " (active account)"
+         };
+         format!("{}{how}", a.playername)
+      })
+      .unwrap_or_else(|| "none, the game will ask you to log in".into());
    let game = match &instance.game_version {
       Some(v) => match ctx.lithic.game_install(v) {
          Ok(install) => format!("{v} ({})", install.path.display()),
@@ -174,6 +186,7 @@ fn show(ctx: &Ctx, id: Option<&str>) -> Result {
       ("Name", instance.name.clone()),
       ("Selected", if v.selected { "yes" } else { "no" }.into()),
       ("Game", game),
+      ("Account", account),
       ("Data folder", instance.data_dir().display().to_string()),
       ("Mods folder", instance.mods_dir().display().to_string()),
       ("Mods", v.mods.to_string()),
@@ -244,6 +257,18 @@ async fn edit(ctx: &Ctx, args: InstanceEditArgs) -> Result {
       Some(v) => Some(resolve_game_version(ctx, v).await?),
       None => None,
    };
+   let account = match &args.account {
+      Some(wanted) => {
+         let accounts = ctx.lithic.accounts()?;
+         let found = accounts
+            .accounts
+            .iter()
+            .find(|a| a.uid == *wanted || a.playername.eq_ignore_ascii_case(wanted))
+            .ok_or_else(|| Error::not_found(lithic_core::Kind::Account, wanted.clone()))?;
+         Some(found.uid.clone())
+      }
+      None => None,
+   };
    let game_args = match &args.args {
       Some(line) => Some(parse_command_line(line)?),
       None => None,
@@ -269,6 +294,12 @@ async fn edit(ctx: &Ctx, args: InstanceEditArgs) -> Result {
       }
       if args.no_game {
          i.game_version = None;
+      }
+      if let Some(uid) = &account {
+         i.account = Some(uid.clone());
+      }
+      if args.no_account {
+         i.account = None;
       }
       if let Some(dir) = &args.mods_dir {
          i.mods_dir = Some(paths::expand_home(dir));

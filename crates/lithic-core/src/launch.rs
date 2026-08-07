@@ -135,6 +135,7 @@ impl Lithic {
    )> {
       let spec = self.launch_spec(instance)?;
       fs::create_dir_all(instance.mods_dir()).at(instance.mods_dir())?;
+      self.inject_account(instance)?;
 
       let logs = instance.logs_dir();
       fs::create_dir_all(&logs).at(&logs)?;

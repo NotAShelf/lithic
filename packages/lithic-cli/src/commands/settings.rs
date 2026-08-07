@@ -88,6 +88,7 @@ pub fn run(ctx: &Ctx, cmd: SettingsCommand) -> Result {
          let settings = ctx.lithic.settings()?;
          let rows = [
             ("Settings", p.settings_file()),
+            ("Accounts", p.accounts_file()),
             ("Instances", p.instances_dir()),
             (
                "Game versions",

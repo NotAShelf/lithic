@@ -153,6 +153,15 @@ impl Ui {
       Ok(answer.trim().to_string())
    }
 
+   pub fn prompt_secret(&self, question: &str) -> Result<String> {
+      if !self.interactive {
+         return fail(format!(
+            "{question} needs a terminal; use --password-stdin instead"
+         ));
+      }
+      rpassword::prompt_password(format!("{question}: ")).map_err(|e| Failure(e.to_string()))
+   }
+
    /// A reporter that draws progress bars on stderr, or does nothing when
    /// output is not a terminal or is meant for scripts.
    pub fn progress(&self) -> Progress {

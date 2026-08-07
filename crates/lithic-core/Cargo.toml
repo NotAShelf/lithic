@@ -14,6 +14,7 @@ dirs           = { workspace = true }
 flate2         = { workspace = true }
 futures        = { workspace = true }
 html2text      = { workspace = true }
+keyring        = { workspace = true, optional = true }
 lenient_semver = { workspace = true }
 md-5           = { workspace = true }
 reqwest        = { workspace = true }
@@ -32,3 +33,9 @@ zip            = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 
+[features]
+# Store account session secrets in the OS keyring (Secret Service on Linux and
+# BSD, Keychain on macOS, Credential Manager on Windows). Without it, or when
+# no keyring answers, sessions go to a file only the user can read.
+default    = [ "os-keyring" ]
+os-keyring = [ "dep:keyring" ]

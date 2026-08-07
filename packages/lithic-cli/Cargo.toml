@@ -16,6 +16,7 @@ clap_complete      = { workspace = true }
 comfy-table        = { workspace = true }
 indicatif          = { workspace = true }
 lithic-core        = { workspace = true }
+rpassword          = { workspace = true }
 serde              = { workspace = true }
 serde_json         = { workspace = true }
 shell-words        = { workspace = true }

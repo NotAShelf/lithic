@@ -91,6 +91,10 @@ pub enum Command {
    /// Show an instance's logs
    Logs(LogsArgs),
 
+   /// Log in to Vintage Story accounts
+   #[command(subcommand)]
+   Account(AccountCommand),
+
    /// Show and change settings
    #[command(subcommand, visible_alias = "config")]
    Settings(SettingsCommand),
@@ -182,6 +186,12 @@ pub struct InstanceEditArgs {
    pub game: Option<String>,
    #[arg(long)]
    pub no_game: bool,
+   /// Account uid or player name to launch with
+   #[arg(long, conflicts_with = "no_account")]
+   pub account: Option<String>,
+   /// Launch with the active account
+   #[arg(long)]
+   pub no_account: bool,
    #[arg(long, value_name = "DIR", conflicts_with = "no_mods_dir")]
    pub mods_dir: Option<PathBuf>,
    #[arg(long)]
@@ -393,6 +403,28 @@ pub struct LogsArgs {
    /// List log files instead of printing one
    #[arg(long)]
    pub list: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum AccountCommand {
+   /// Log in; prompts for the password and a two-factor code if needed
+   Login {
+      #[arg(long)]
+      email: Option<String>,
+      /// Read the password from standard input
+      #[arg(long)]
+      password_stdin: bool,
+      /// Two-factor code, if you already have one
+      #[arg(long, value_name = "CODE")]
+      code: Option<String>,
+   },
+   /// Known accounts
+   #[command(visible_alias = "ls")]
+   List,
+   /// Use this account for instances that do not name one
+   Switch { account: String },
+   /// Forget an account and its session
+   Logout { account: String },
 }
 
 #[derive(Debug, Subcommand)]

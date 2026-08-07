@@ -1,3 +1,4 @@
+mod account;
 mod browse;
 mod game;
 mod instance;
@@ -24,6 +25,7 @@ pub async fn run(ctx: &Ctx, command: Command) -> Result {
       Command::Game(cmd) => game::run(ctx, cmd).await,
       Command::Launch(args) => launch::launch(ctx, args).await,
       Command::Logs(args) => launch::logs(ctx, &args),
+      Command::Account(cmd) => account::run(ctx, cmd).await,
       Command::Settings(cmd) => settings::run(ctx, cmd),
       Command::Completions { .. } => Ok(()),
    }

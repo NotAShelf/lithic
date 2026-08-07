@@ -9,6 +9,7 @@ pub enum Kind {
    GameVersion,
    Mod,
    Release,
+   Account,
 }
 
 impl fmt::Display for Kind {
@@ -18,6 +19,7 @@ impl fmt::Display for Kind {
          Kind::GameVersion => "game version",
          Kind::Mod => "mod",
          Kind::Release => "release",
+         Kind::Account => "account",
       })
    }
 }
@@ -81,6 +83,8 @@ pub enum Error {
    #[error("instance {0} is running")]
    Running(String),
 
+   #[error(transparent)]
+   Auth(#[from] crate::auth::AuthError),
 }
 
 impl Error {
