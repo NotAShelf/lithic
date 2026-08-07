@@ -3,20 +3,31 @@ mod commands;
 mod style;
 mod ui;
 
+use std::env;
 use std::ffi::OsString;
+use std::io::{stderr, stdout};
 use std::process::ExitCode;
 
 use clap::{CommandFactory, Parser};
-use lithic_core::{Instance, Lithic};
+use lithic_core::{Error, Instance, Lithic};
+use tokio::runtime::Builder;
 use tracing_subscriber::EnvFilter;
 
 use args::{Cli, Command, Global};
 use ui::{Result, Ui};
 
+/// Runs the CLI with the process arguments and returns its exit status.
+#[must_use]
 pub fn run() -> ExitCode {
-   run_with(std::env::args_os())
+   run_with(env::args_os())
 }
 
+/// Runs the CLI with the supplied arguments and returns its exit status.
+#[must_use]
+#[expect(
+   clippy::print_stderr,
+   reason = "runtime startup failure is a CLI error diagnostic"
+)]
 pub fn run_with<I, T>(args: I) -> ExitCode
 where
    I: IntoIterator<Item = T>,
@@ -35,7 +46,7 @@ where
    };
    init_logging(&cli.global);
 
-   let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
+   let runtime = match Builder::new_multi_thread().enable_all().build() {
       Ok(rt) => rt,
       Err(e) => {
          eprintln!("error: cannot start the async runtime: {e}");
@@ -56,7 +67,7 @@ fn init_logging(global: &Global) {
       .unwrap_or_else(|_| EnvFilter::new(format!("warn,lithic_core={level},lithic_cli={level}")));
    let _ = tracing_subscriber::fmt()
       .with_env_filter(filter)
-      .with_writer(std::io::stderr)
+      .with_writer(stderr)
       .with_target(false)
       .without_time()
       .try_init();
@@ -74,7 +85,7 @@ impl Ctx {
    pub fn instance(&self, positional: Option<&str>) -> Result<Instance> {
       let id = positional.or(self.instance.as_deref());
       self.lithic.resolve_instance(id).map_err(|e| match e {
-         lithic_core::Error::Invalid(_) if id.is_none() => ui::Failure(
+         Error::Invalid(_) if id.is_none() => ui::Failure(
             "no instance selected; create one with `lithic instance create`, select one with \
              `lithic instance select <id>`, or pass --instance"
                .to_string(),
@@ -87,7 +98,7 @@ impl Ctx {
 async fn dispatch(cli: Cli) -> ExitCode {
    if let Command::Completions { shell } = cli.command {
       let mut cmd = Cli::command();
-      clap_complete::generate(shell, &mut cmd, "lithic", &mut std::io::stdout());
+      clap_complete::generate(shell, &mut cmd, "lithic", &mut stdout());
       return ExitCode::SUCCESS;
    }
 
@@ -125,7 +136,7 @@ async fn dispatch(cli: Cli) -> ExitCode {
    let ctx = Ctx {
       ui: Ui::new(&cli.global, settings.cli.table),
       lithic,
-      instance: cli.global.instance.clone(),
+      instance: cli.global.instance,
    };
 
    match commands::run(&ctx, cli.command).await {
