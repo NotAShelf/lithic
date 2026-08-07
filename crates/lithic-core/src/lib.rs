@@ -44,6 +44,11 @@ pub enum Freshness {
 }
 
 impl Lithic {
+   /// Creates the HTTP and `ModDB` clients for these paths.
+   ///
+   /// # Errors
+   ///
+   /// Returns an error if the HTTP client cannot be built.
    pub fn new(paths: Paths) -> Result<Self> {
       let http = Http::new()?;
       Ok(Self {
@@ -53,22 +58,40 @@ impl Lithic {
       })
    }
 
+   /// Creates a handle using the configured directories.
+   ///
+   /// # Errors
+   ///
+   /// Returns an error if the directories cannot be resolved or the HTTP
+   /// client cannot be built.
    pub fn from_env() -> Result<Self> {
       Self::new(Paths::from_env()?)
    }
 
+   /// Reads settings, using defaults if no settings file exists.
+   ///
+   /// # Errors
+   ///
+   /// Returns an error if the settings file cannot be read or parsed.
    pub fn settings(&self) -> Result<Settings> {
       Ok(fsutil::read_toml(&self.paths.settings_file())?.unwrap_or_default())
    }
 
-   /// Applies `f` to the settings on disk, re-reading them first so changes
-   /// made by another lithic process in the meantime are kept.
+   /// Re-reads the settings under a file lock before applying `f`.
+   ///
+   /// # Errors
+   ///
+   /// Returns an error if locking, reading, or writing the settings fails.
    pub fn update_settings<R>(&self, f: impl FnOnce(&mut Settings) -> R) -> Result<R> {
       fsutil::update_toml(&self.paths.settings_file(), |s: &mut Settings| Ok(f(s)))
    }
 
-   /// The ModDB mod list. A failed refresh falls back to a stale cache when
-   /// there is one.
+   /// Returns the `ModDB` mod list, using stale cached data if a refresh fails.
+   ///
+   /// # Errors
+   ///
+   /// Returns an error if settings cannot be read, or if the request fails
+   /// without a usable cache.
    pub async fn mod_index(&self, freshness: Freshness) -> Result<ModIndex> {
       let path = self.paths.mod_index_file();
       let max_age = f64::from(self.settings()?.mods.index_max_age_hours);
