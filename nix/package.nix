@@ -9,16 +9,26 @@
   libxkbcommon,
   wayland,
   vulkan-loader,
+  libx11,
+  libxcursor,
+  libxi,
+  libxrandr,
   makeWrapper,
 }: let
   cargoTOML = (lib.importTOML ../Cargo.toml).workspace.package;
   pname = "lithic";
   version = cargoTOML.version;
 
+  # winit loads the windowing libraries at runtime, so they have to be on the
+  # library path for both Wayland and X11 sessions.
   runtimeInputs = [
     libxkbcommon
     vulkan-loader
     wayland
+    libx11
+    libxcursor
+    libxi
+    libxrandr
   ];
 
   buildInputs = runtimeInputs ++ [openssl.dev];
