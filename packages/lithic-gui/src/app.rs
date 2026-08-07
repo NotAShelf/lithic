@@ -1,20 +1,27 @@
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write as _;
 use std::path::PathBuf;
+use std::pin::pin;
 use std::time::{Duration, Instant};
 
+use futures::channel::mpsc::{Sender, unbounded};
 use futures::{SinkExt, StreamExt};
-use iced::widget::{button, column, container, pick_list, row, scrollable, space, text};
-use iced::{Element, Fill, Subscription, Task, Theme, window};
+use iced::widget::{button, column, container, pick_list, row, scrollable, space, stack, text};
+use iced::{Element, Fill, Subscription, Task, Theme, stream, time, window};
 use lithic_core::auth::Accounts;
 use lithic_core::game::{Install, Manifest};
 use lithic_core::launch::{Exit, Session};
 use lithic_core::mods::{Change, InstallOptions, ModRef, Report};
-use lithic_core::{Cancel, Event, Freshness, Instance, Lithic, Reporter, Settings, Step};
+use lithic_core::{
+   Cancel, Error, Event, Freshness, Instance, Lithic, Reporter, Result as CoreResult, Settings, Step,
+};
+use native_theme_iced::from_system;
+use tokio::task::spawn_blocking;
 
 use crate::i18n::{t, t1, t2};
 use crate::notify::{self, Notifications};
 use crate::screen::{accounts, browse, game, instance, instances, settings};
-use crate::task::blocking;
+use crate::task::{blocking, open};
 use crate::{style, widget};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,11 +37,11 @@ pub enum Page {
 impl Page {
    pub fn from_setting(value: &str) -> Self {
       match value {
-         "browse" => Page::Browse,
-         "games" | "game_versions" => Page::Games,
-         "accounts" => Page::Accounts,
-         "settings" => Page::Settings,
-         _ => Page::Instances,
+         "browse" => Self::Browse,
+         "games" | "game_versions" => Self::Games,
+         "accounts" => Self::Accounts,
+         "settings" => Self::Settings,
+         _ => Self::Instances,
       }
    }
 }
@@ -50,6 +57,11 @@ pub struct Busy {
 
 impl Busy {
    /// How far the current transfer is, when its size is known.
+   #[expect(
+      clippy::cast_precision_loss,
+      clippy::cast_possible_truncation,
+      reason = "progress bars display an approximate fraction of byte counts"
+   )]
    pub fn fraction(&self) -> Option<f32> {
       let (_, done, total) = self.transfer.as_ref()?;
       let total = (*total)?;
@@ -191,33 +203,30 @@ impl Shared {
          },
       );
       let lithic = self.lithic.clone();
-      Task::stream(iced::stream::channel(
-         32,
-         async move |mut out: futures::channel::mpsc::Sender<Message>| {
-            let (tx, mut rx) = futures::channel::mpsc::unbounded::<Event>();
-            let reporter = Reporter::new(move |e| {
-               let _ = tx.unbounded_send(e);
-            });
-            let mut work = std::pin::pin!(work(lithic, reporter, cancel));
-            let mut last_transfer = Instant::now() - Duration::from_secs(1);
-            let result = loop {
-               tokio::select! {
-                  result = &mut work => break result,
-                  Some(event) = rx.next() => {
-                     let partial = matches!(&event, Event::Transfer { done, total, .. } if Some(*done) != *total);
-                     if partial && last_transfer.elapsed() < Duration::from_millis(120) {
-                        continue;
-                     }
-                     if partial {
-                        last_transfer = Instant::now();
-                     }
-                     let _ = out.send(Message::OpEvent(key.clone(), event)).await;
+      Task::stream(stream::channel(32, async move |mut out: Sender<Message>| {
+         let (tx, mut rx) = unbounded::<Event>();
+         let reporter = Reporter::new(move |e| {
+            let _ = tx.unbounded_send(e);
+         });
+         let mut work = pin!(work(lithic, reporter, cancel));
+         let mut last_transfer: Option<Instant> = None;
+         let result = loop {
+            tokio::select! {
+               result = &mut work => break result,
+               Some(event) = rx.next() => {
+                  let partial = matches!(&event, Event::Transfer { done, total, .. } if Some(*done) != *total);
+                  if partial && last_transfer.is_some_and(|last| last.elapsed() < Duration::from_millis(120)) {
+                     continue;
                   }
+                  if partial {
+                     last_transfer = Some(Instant::now());
+                  }
+                  let _ = out.send(Message::OpEvent(key.clone(), event)).await;
                }
-            };
-            let _ = out.send(Message::OpDone(key, result)).await;
-         },
-      ))
+            }
+         };
+         let _ = out.send(Message::OpDone(key, result)).await;
+      }))
    }
 }
 
@@ -232,17 +241,12 @@ pub struct Snapshot {
    sessions: HashSet<String>,
 }
 
-fn load_snapshot(lithic: &Lithic) -> lithic_core::Result<Snapshot> {
+fn load_snapshot(lithic: &Lithic) -> CoreResult<Snapshot> {
    let listing = lithic.list_instances()?;
    let mod_counts = listing
       .instances
       .iter()
-      .map(|i| {
-         (
-            i.id.clone(),
-            lithic.installed_mods(i).map(|m| m.len()).unwrap_or(0),
-         )
-      })
+      .map(|i| (i.id.clone(), lithic.installed_mods(i).map_or(0, |m| m.len())))
       .collect();
    let accounts = lithic.accounts()?;
    let sessions = accounts
@@ -268,9 +272,13 @@ fn load_snapshot(lithic: &Lithic) -> lithic_core::Result<Snapshot> {
 
 #[derive(Debug, Clone)]
 enum Dialog {
-   Migrated { notes: Vec<String>, backup: PathBuf },
+   Migrated {
+      notes: Vec<String>,
+      backup: PathBuf,
+   },
    MigrationFailed(String),
    Quit,
+   /// A `vintagestorymodinstall://` link lithic was started with.
    Link(ModRef),
 }
 
@@ -316,6 +324,7 @@ pub struct App {
    shared: Shared,
    page: Page,
    dialog: Option<Dialog>,
+   /// A link waiting for the current dialog to close.
    queued_link: Option<ModRef>,
    link_target: Option<String>,
    system_theme: Option<Theme>,
@@ -327,7 +336,6 @@ pub struct App {
    browse: browse::State,
    games: game::State,
    accounts: accounts::State,
-   settings: settings::State,
 }
 
 impl App {
@@ -360,7 +368,6 @@ impl App {
          browse: browse::State::default(),
          games: game::State::default(),
          accounts: accounts::State::default(),
-         settings: settings::State,
          shared,
       };
       app.refresh_theme();
@@ -376,10 +383,10 @@ impl App {
 
    pub fn title(&self) -> String {
       match &self.page {
-         Page::Instance(id) => match self.shared.instance(id) {
-            Some(i) => t1("window-title-instance", "name", i.name.clone()),
-            None => t("window-title"),
-         },
+         Page::Instance(id) => self.shared.instance(id).map_or_else(
+            || t("window-title"),
+            |i| t1("window-title-instance", "name", i.name.clone()),
+         ),
          _ => t("window-title"),
       }
    }
@@ -477,12 +484,10 @@ impl App {
             }
             Task::perform(
                async {
-                  tokio::task::spawn_blocking(|| {
-                     native_theme_iced::from_system().ok().map(|(theme, ..)| theme)
-                  })
-                  .await
-                  .ok()
-                  .flatten()
+                  spawn_blocking(|| from_system().ok().map(|(theme, ..)| theme))
+                     .await
+                     .ok()
+                     .flatten()
                },
                Message::SystemTheme,
             )
@@ -511,17 +516,17 @@ impl App {
             let name = self
                .shared
                .instance(&id)
-               .map(|i| i.name.clone())
-               .unwrap_or(id.clone());
+               .map_or_else(|| id.clone(), |i| i.name.clone());
             let toast = match result {
                Ok(exit) if exit.success || exit.stopped => Task::none(),
                Ok(exit) => {
                   let mut detail = exit.tail.join("\n");
                   if let Some(crash) = &exit.crash_report {
-                     detail.push_str(&format!(
+                     let _ = write!(
+                        detail,
                         "\n\n{}",
                         t1("launch-crash-report", "path", crash.display().to_string())
-                     ));
+                     );
                   }
                   let code = exit.code.map_or_else(|| "?".to_string(), |c| c.to_string());
                   self
@@ -562,7 +567,7 @@ impl App {
             }
             Task::none()
          }
-         Message::OpDone(key, result) => self.finish_op(key, result),
+         Message::OpDone(key, result) => self.finish_op(&key, result),
          Message::CancelOp(key) => {
             if let Some(busy) = self.shared.busy.get(&key) {
                busy.cancel.cancel();
@@ -574,7 +579,7 @@ impl App {
             self.shared.toasts.update(m);
             Task::none()
          }
-         Message::Open(target) => match crate::task::open(&target) {
+         Message::Open(target) => match open(&target) {
             Ok(()) => Task::none(),
             Err(e) => self.shared.toasts.error(t("open-failed"), Some(e)),
          },
@@ -644,7 +649,7 @@ impl App {
          Message::Games(m) => self.games.update(m, &mut self.shared),
          Message::Accounts(m) => self.accounts.update(m, &mut self.shared),
          Message::Settings(m) => {
-            let task = self.settings.update(m, &mut self.shared);
+            let task = settings::update(m, &mut self.shared);
             self.refresh_theme();
             task
          }
@@ -657,36 +662,32 @@ impl App {
       }
       self.shared.launching.insert(id.clone());
       let lithic = self.shared.lithic.clone();
-      Task::stream(iced::stream::channel(
-         4,
-         async move |mut out: futures::channel::mpsc::Sender<Message>| {
-            let started = async {
-               let instance = lithic.instance(&id)?;
-               lithic.set_active_instance(Some(&id))?;
-               lithic.launch(&instance)
+      Task::stream(stream::channel(4, async move |mut out: Sender<Message>| {
+         let started = async {
+            let instance = lithic.instance(&id)?;
+            lithic.set_active_instance(Some(&id))?;
+            lithic.launch(&instance)
+         }
+         .await;
+         match started {
+            Ok((session, waiter)) => {
+               let _ = out.send(Message::GameStarted(id.clone(), session)).await;
+               let exit = waiter.await.map_err(|e| e.to_string());
+               let _ = out.send(Message::GameExited(id, exit)).await;
             }
-            .await;
-            match started {
-               Ok((session, waiter)) => {
-                  let _ = out.send(Message::GameStarted(id.clone(), session)).await;
-                  let exit = waiter.await.map_err(|e| e.to_string());
-                  let _ = out.send(Message::GameExited(id, exit)).await;
-               }
-               Err(e) => {
-                  let _ = out.send(Message::GameFailed(id, e.to_string())).await;
-               }
+            Err(e) => {
+               let _ = out.send(Message::GameFailed(id, e.to_string())).await;
             }
-         },
-      ))
+         }
+      }))
    }
 
-   fn finish_op(&mut self, key: String, result: Result<Outcome, String>) -> Task<Message> {
-      let kind = self.shared.busy.remove(&key).map(|b| b.kind);
+   fn finish_op(&mut self, key: &str, result: Result<Outcome, String>) -> Task<Message> {
+      let kind = self.shared.busy.remove(key).map(|b| b.kind);
       let name = self
          .shared
-         .instance(&key)
-         .map(|i| i.name.clone())
-         .unwrap_or_else(|| key.clone());
+         .instance(key)
+         .map_or_else(|| key.to_string(), |i| i.name.clone());
       let mut tasks = vec![Task::done(Message::Reload)];
 
       match result {
@@ -711,7 +712,7 @@ impl App {
                   .success(t1("pack-exported", "path", path.display().to_string())),
             );
          }
-         Err(e) if e == lithic_core::Error::Cancelled.to_string() => {
+         Err(e) if e == Error::Cancelled.to_string() => {
             tasks.push(self.shared.toasts.info(t("op-cancelled")));
          }
          Err(e) => tasks.push(self.shared.toasts.error(t1("op-failed", "name", name), Some(e))),
@@ -755,9 +756,11 @@ impl App {
          let detail = summary
             .failures
             .iter()
-            .map(|(id, by, e)| match by {
-               Some(by) => format!("{id} ({}): {e}", t1("mods-needed-by", "name", by.clone())),
-               None => format!("{id}: {e}"),
+            .map(|(id, by, e)| {
+               by.as_ref().map_or_else(
+                  || format!("{id}: {e}"),
+                  |by| format!("{id} ({}): {e}", t1("mods-needed-by", "name", by.clone())),
+               )
             })
             .collect::<Vec<_>>()
             .join("\n");
@@ -772,21 +775,21 @@ impl App {
    pub fn view(&self) -> Element<'_, Message> {
       let content: Element<Message> = match &self.page {
          Page::Instances => self.instances.view(&self.shared).map(Message::Instances),
-         Page::Instance(_) => match &self.instance {
-            Some(state) => state.view(&self.shared).map(Message::Instance),
-            None => widget::loading(t("loading")),
-         },
+         Page::Instance(_) => self.instance.as_ref().map_or_else(
+            || widget::loading(t("loading")),
+            |state| state.view(&self.shared).map(Message::Instance),
+         ),
          Page::Browse => self.browse.view(&self.shared).map(Message::Browse),
          Page::Games => self.games.view(&self.shared).map(Message::Games),
          Page::Accounts => self.accounts.view(&self.shared).map(Message::Accounts),
-         Page::Settings => self.settings.view(&self.shared).map(Message::Settings),
+         Page::Settings => settings::view(&self.shared).map(Message::Settings),
       };
 
       let layout = row![self.sidebar(), container(content).width(Fill).height(Fill)];
       let with_toasts: Element<Message> = if self.shared.toasts.is_empty() {
          layout.into()
       } else {
-         iced::widget::stack![
+         stack![
             layout,
             container(self.shared.toasts.view().map(Message::Toast))
                .padding(16)
@@ -916,16 +919,16 @@ impl App {
             .on_press(Message::Navigate(page))
       };
 
-      let account = match self
+      let account = self
          .shared
          .accounts
          .active
          .as_deref()
          .and_then(|uid| self.shared.accounts.get(uid))
-      {
-         Some(a) => t1("sidebar-signed-in", "name", a.playername.clone()),
-         None => t("sidebar-signed-out"),
-      };
+         .map_or_else(
+            || t("sidebar-signed-out"),
+            |a| t1("sidebar-signed-in", "name", a.playername.clone()),
+         );
       let running = self.shared.running.len();
 
       let mut col = column![
@@ -959,15 +962,14 @@ impl App {
    pub fn subscription(&self) -> Subscription<Message> {
       let mut subs = vec![window::close_requests().map(Message::CloseRequested)];
       if matches!(self.shared.settings.gui.theme_mode.as_str(), "system" | "preset") {
-         subs.push(iced::time::every(Duration::from_secs(30)).map(|_| Message::CheckSystemTheme));
+         subs.push(time::every(Duration::from_secs(30)).map(|_| Message::CheckSystemTheme));
       }
       if let (Page::Instance(id), Some(state)) = (&self.page, &self.instance)
          && self.shared.running.contains_key(id)
          && state.follows_log()
       {
          subs.push(
-            iced::time::every(Duration::from_secs(2))
-               .map(|_| Message::Instance(instance::Message::RefreshLog)),
+            time::every(Duration::from_secs(2)).map(|_| Message::Instance(instance::Message::RefreshLog)),
          );
       }
       Subscription::batch(subs)
