@@ -6,8 +6,11 @@ pub mod install;
 pub mod lock;
 pub mod resolve;
 
+use crate::paths::expand_home;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -22,7 +25,7 @@ use crate::instance::Instance;
 use crate::modinfo::{self, Format, ModInfo};
 use crate::version;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InstalledMod {
    pub info: ModInfo,
    pub path: PathBuf,
@@ -35,10 +38,12 @@ pub struct InstalledMod {
 }
 
 impl InstalledMod {
+   #[must_use]
    pub fn mod_id(&self) -> &str {
       &self.info.mod_id
    }
 
+   #[must_use]
    pub fn display_name(&self) -> &str {
       if self.info.name.trim().is_empty() {
          &self.file_name
@@ -49,7 +54,7 @@ impl InstalledMod {
 }
 
 /// A mod as the user names it: `carryon`, `carryon@1.14.3`, a
-/// `vintagestorymodinstall://` link, or a ModDB page URL.
+/// `vintagestorymodinstall://` link, or a `ModDB` page URL.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModRef {
    pub id: String,
@@ -57,20 +62,21 @@ pub struct ModRef {
 }
 
 impl ModRef {
+   /// # Errors
+   /// Returns an error if the reference has no id or contains whitespace in its id.
    pub fn parse(input: &str) -> Result<Self> {
       let s = input.trim();
       let s = s.strip_prefix("vintagestorymodinstall://").unwrap_or(s);
       let s = s
          .strip_prefix("https://mods.vintagestory.at/")
          .or_else(|| s.strip_prefix("http://mods.vintagestory.at/"))
-         .map(|rest| {
+         .map_or(s, |rest| {
             rest
                .trim_start_matches("show/mod/")
                .split(['?', '#', '/'])
                .next()
                .unwrap_or(rest)
-         })
-         .unwrap_or(s);
+         });
       let s = s.trim_end_matches('/');
       let (id, version) = match s.split_once('@') {
          Some((id, v)) => (id.trim(), Some(v.trim().to_string()).filter(|v| !v.is_empty())),
@@ -86,8 +92,8 @@ impl ModRef {
    }
 }
 
-impl std::fmt::Display for ModRef {
-   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for ModRef {
+   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
       match &self.version {
          Some(v) => write!(f, "{}@{v}", self.id),
          None => f.write_str(&self.id),
@@ -148,12 +154,13 @@ impl OperationLock {
 }
 
 impl Lithic {
+   /// # Errors
+   /// Returns an error when the instance's lock file cannot be read.
    pub fn mod_lock(&self, instance: &Instance) -> Result<ModLock> {
       Ok(fsutil::read_json(&instance.lock_file())?.unwrap_or_default())
    }
 
    pub(crate) fn update_mod_lock<R>(
-      &self,
       instance: &Instance,
       f: impl FnOnce(&mut ModLock) -> Result<R>,
    ) -> Result<R> {
@@ -165,6 +172,8 @@ impl Lithic {
    }
 
    /// Every mod in the instance, enabled or not, sorted by name.
+   /// # Errors
+   /// Returns an error if the lock file or a mod directory cannot be read.
    pub fn installed_mods(&self, instance: &Instance) -> Result<Vec<InstalledMod>> {
       let lock = self.mod_lock(instance)?;
       let mut mods = scan_dir(&instance.mods_dir(), true, &lock)?;
@@ -179,6 +188,8 @@ impl Lithic {
    }
 
    /// Moves a mod into or out of the disabled folder.
+   /// # Errors
+   /// Returns an error when the mod is absent or a file operation fails.
    pub fn set_mod_enabled(&self, instance: &Instance, mod_id: &str, enabled: bool) -> Result<()> {
       let _op = OperationLock::try_acquire(instance)?;
       let mods = self.installed_mods(instance)?;
@@ -203,9 +214,11 @@ impl Lithic {
 
    /// Pins a mod to a version (`Some`) or releases the pin (`None`). A pin can
    /// be set for a mod that is not installed yet.
+   /// # Errors
+   /// Returns an error if the lock file cannot be updated.
    pub fn set_mod_pin(&self, instance: &Instance, mod_id: &str, pin: Option<&str>) -> Result<()> {
       let key = mod_id.to_ascii_lowercase();
-      self.update_mod_lock(instance, |lock| {
+      Self::update_mod_lock(instance, |lock| {
          lock.mods.entry(key).or_default().pin = pin.map(ToString::to_string);
          Ok(())
       })
@@ -213,6 +226,8 @@ impl Lithic {
 
    /// Removes mods by id (or file name). With `orphans`, dependencies that
    /// only the removed mods needed go too. Returns what was removed.
+   /// # Errors
+   /// Returns an error if a mod is absent, cannot be moved or backed up, or the lock cannot be updated.
    pub fn remove_mods(
       &self,
       instance: &Instance,
@@ -270,7 +285,7 @@ impl Lithic {
             self.backup_mod(instance, m)?;
          }
          fsutil::remove_path(&m.path)?;
-         self.update_mod_lock(instance, |lock| {
+         Self::update_mod_lock(instance, |lock| {
             if let Some(entry) = lock.mods.get_mut(m.mod_id()) {
                *entry = LockEntry {
                   pin: entry.pin.take(),
@@ -284,6 +299,8 @@ impl Lithic {
    }
 
    /// Installed mods that depend on `mod_id`.
+   /// # Errors
+   /// Returns an error if the installed mods cannot be read.
    pub fn dependents(&self, instance: &Instance, mod_id: &str) -> Result<Vec<InstalledMod>> {
       let key = mod_id.to_ascii_lowercase();
       Ok(self
@@ -300,8 +317,7 @@ impl Lithic {
       let root = settings
          .backups
          .dir
-         .map(crate::paths::expand_home)
-         .unwrap_or_else(|| self.paths.backups_dir());
+         .map_or_else(|| self.paths.backups_dir(), expand_home);
       let dir = root
          .join(&instance.id)
          .join(fsutil::sanitize_file_name(m.mod_id()));
@@ -387,7 +403,7 @@ pub fn problems(mods: &[InstalledMod]) -> Vec<Problem> {
 fn scan_dir(dir: &Path, enabled: bool, lock: &ModLock) -> Result<Vec<InstalledMod>> {
    let entries = match fs::read_dir(dir) {
       Ok(entries) => entries,
-      Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+      Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
       Err(e) => return Err(Error::io(dir, e)),
    };
    let mut out = Vec::new();
@@ -440,24 +456,31 @@ pub(crate) fn free_path(dir: &Path, name: &str) -> PathBuf {
       Some((s, e)) if !s.is_empty() => (s, format!(".{e}")),
       _ => (name, String::new()),
    };
-   (2..)
+   (2..=i32::MAX)
       .map(|n| dir.join(format!("{stem} ({n}){ext}")))
       .find(|p| !p.exists())
       .unwrap_or(candidate)
 }
 
 #[cfg(test)]
+#[expect(
+   clippy::unwrap_used,
+   reason = "test setup and assertions intentionally fail on error"
+)]
 pub(crate) mod tests {
    use super::*;
    use crate::Paths;
    use crate::instance::NewInstance;
    use std::io::Write;
+   use std::thread;
+   use std::time::Duration;
+   use zip::write::SimpleFileOptions;
 
    pub fn write_mod_zip(dir: &Path, file: &str, modinfo: &str) -> PathBuf {
       fs::create_dir_all(dir).unwrap();
       let path = dir.join(file);
       let mut w = zip::ZipWriter::new(fs::File::create(&path).unwrap());
-      w.start_file("modinfo.json", zip::write::SimpleFileOptions::default())
+      w.start_file("modinfo.json", SimpleFileOptions::default())
          .unwrap();
       w.write_all(modinfo.as_bytes()).unwrap();
       w.finish().unwrap();
@@ -555,7 +578,7 @@ pub(crate) mod tests {
          r#"{"modid":"other","version":"1.0.0","dependencies":{"shared":""}}"#,
       );
       write_mod_zip(&i.mods_dir(), "s.zip", r#"{"modid":"shared","version":"1.0.0"}"#);
-      l.update_mod_lock(&i, |lock| {
+      Lithic::update_mod_lock(&i, |lock| {
          lock.mods.insert(
             "lib".into(),
             LockEntry {
@@ -644,7 +667,7 @@ pub(crate) mod tests {
       let m = l.installed_mods(&i).unwrap().remove(0);
       for _ in 0..4 {
          l.backup_mod(&i, &m).unwrap();
-         std::thread::sleep(std::time::Duration::from_millis(3));
+         thread::sleep(Duration::from_millis(3));
       }
       let dir = l.paths.backups_dir().join(&i.id).join("app");
       assert_eq!(fs::read_dir(dir).unwrap().count(), 2);

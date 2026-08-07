@@ -19,7 +19,7 @@ pub struct LockEntry {
    pub file: Option<String>,
    #[serde(skip_serializing_if = "Option::is_none")]
    pub version: Option<String>,
-   /// Numeric ModDB id.
+   /// Numeric `ModDB` id.
    #[serde(skip_serializing_if = "Option::is_none")]
    pub moddb_id: Option<i64>,
    #[serde(skip_serializing_if = "Option::is_none")]
@@ -37,7 +37,8 @@ pub struct LockEntry {
 impl LockEntry {
    /// An entry that carries nothing but a pin can outlive the mod itself, so
    /// a pin set before installing still applies.
-   pub fn is_empty(&self) -> bool {
+   #[must_use]
+   pub const fn is_empty(&self) -> bool {
       self.pin.is_none() && self.file.is_none() && self.moddb_id.is_none()
    }
 }
