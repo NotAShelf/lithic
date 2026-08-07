@@ -1,10 +1,12 @@
+use std::io::stdin;
+
 use comfy_table::Cell;
 use lithic_core::auth::{Account, AuthError};
 use lithic_core::{Error, Kind};
 
 use crate::Ctx;
 use crate::args::AccountCommand;
-use crate::ui::{Failure, Result, fail};
+use crate::ui::{Failure, Result, Ui, fail};
 
 pub async fn run(ctx: &Ctx, cmd: AccountCommand) -> Result {
    match cmd {
@@ -16,7 +18,7 @@ pub async fn run(ctx: &Ctx, cmd: AccountCommand) -> Result {
       AccountCommand::List => {
          let accounts = ctx.lithic.accounts()?;
          if ctx.ui.json {
-            return ctx.ui.print_json(&accounts);
+            return Ui::print_json(&accounts);
          }
          if accounts.accounts.is_empty() {
             ctx.ui.status("No accounts. Log in with `lithic account login`.");
@@ -38,7 +40,7 @@ pub async fn run(ctx: &Ctx, cmd: AccountCommand) -> Result {
                }),
             ]);
          }
-         ctx.ui.print_table(&table);
+         Ui::print_table(&table);
          Ok(())
       }
       AccountCommand::Switch { account } => {
@@ -81,9 +83,7 @@ async fn login(ctx: &Ctx, email: Option<String>, password_stdin: bool, code: Opt
    };
    let password = if password_stdin {
       let mut line = String::new();
-      std::io::stdin()
-         .read_line(&mut line)
-         .map_err(|e| Failure(e.to_string()))?;
+      stdin().read_line(&mut line).map_err(|e| Failure(e.to_string()))?;
       line.trim_end_matches(['\r', '\n']).to_string()
    } else {
       ctx.ui.prompt_secret(&format!("Password for {email}"))?
