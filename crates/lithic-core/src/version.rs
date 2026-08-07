@@ -1,4 +1,4 @@
-//! Version strings as they appear on the ModDB and in `modinfo.json`.
+//! Version strings as they appear on the `ModDB` and in `modinfo.json`.
 //!
 //! Mod authors are inconsistent (`v1.2`, `1.0.0.4`, `2.0.0-dev.20`), so
 //! parsing is lenient and anything unparsable falls back to comparing text.
@@ -7,12 +7,14 @@ use std::cmp::Ordering;
 
 use semver::Version;
 
+#[must_use]
 pub fn parse(s: &str) -> Option<Version> {
    let s = s.trim();
    let s = s.strip_prefix(['v', 'V']).unwrap_or(s);
    lenient_semver::parse(s).ok()
 }
 
+#[must_use]
 pub fn compare(a: &str, b: &str) -> Ordering {
    match (parse(a), parse(b)) {
       (Some(x), Some(y)) => x.cmp(&y),
@@ -23,6 +25,7 @@ pub fn compare(a: &str, b: &str) -> Ordering {
 }
 
 /// `-dev`, `-pre`, `-rc` and friends.
+#[must_use]
 pub fn is_prerelease(s: &str) -> bool {
    match parse(s) {
       Some(v) => !v.pre.is_empty(),
@@ -31,6 +34,7 @@ pub fn is_prerelease(s: &str) -> bool {
 }
 
 /// `(major, minor)` of a version, e.g. `1.21.5-rc.2` gives `(1, 21)`.
+#[must_use]
 pub fn minor(s: &str) -> Option<(u64, u64)> {
    if let Some(v) = parse(s) {
       return Some((v.major, v.minor));
@@ -44,6 +48,7 @@ pub fn minor(s: &str) -> Option<(u64, u64)> {
 
 /// Whether `installed` meets a `modinfo.json` dependency requirement. The game
 /// reads the requirement as a minimum version; `*` or empty accepts anything.
+#[must_use]
 pub fn satisfies(installed: &str, required: &str) -> bool {
    let required = required.trim();
    if required.is_empty() || required == "*" {
@@ -65,6 +70,7 @@ pub enum Fit {
    Exact,
 }
 
+#[must_use]
 pub fn fit(tags: &[String], game_version: &str) -> Fit {
    let tags: Vec<&str> = tags.iter().map(|t| t.trim()).filter(|t| !t.is_empty()).collect();
    if tags.is_empty() {
