@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::result::Result as StdResult;
 
 use lithic_core::mods::{self, InstallOptions, InstalledMod, ModRef, Problem, Reason, Report};
 use lithic_core::{Cancel, Instance};
@@ -6,7 +7,7 @@ use serde::Serialize;
 
 use crate::Ctx;
 use crate::args::{ModsCommand, ModsInstallArgs, ModsListArgs, ModsRemoveArgs, ModsUpdateArgs};
-use crate::ui::{Result, fail};
+use crate::ui::{Result, Ui, fail};
 
 pub async fn run(ctx: &Ctx, cmd: ModsCommand) -> Result {
    match cmd {
@@ -18,14 +19,13 @@ pub async fn run(ctx: &Ctx, cmd: ModsCommand) -> Result {
       ModsCommand::Disable { mods } => set_enabled(ctx, &mods, false),
       ModsCommand::Pin { id, version } => {
          let instance = ctx.instance(None)?;
-         let version = match version {
-            Some(v) => v,
-            None => {
-               let installed = ctx.lithic.installed_mods(&instance)?;
-               match installed.iter().find(|m| m.mod_id().eq_ignore_ascii_case(&id)) {
-                  Some(m) if !m.info.version.is_empty() => m.info.version.clone(),
-                  _ => return fail(format!("{id} is not installed; give the version to pin")),
-               }
+         let version = if let Some(v) = version {
+            v
+         } else {
+            let installed = ctx.lithic.installed_mods(&instance)?;
+            match installed.iter().find(|m| m.mod_id().eq_ignore_ascii_case(&id)) {
+               Some(m) if !m.info.version.is_empty() => m.info.version.clone(),
+               _ => return fail(format!("{id} is not installed; give the version to pin")),
             }
          };
          ctx.lithic.set_mod_pin(&instance, &id, Some(&version))?;
@@ -55,7 +55,7 @@ fn list(ctx: &Ctx, args: &ModsListArgs) -> Result {
          mods: &'a [InstalledMod],
          problems: &'a [Problem],
       }
-      return ctx.ui.print_json(&Out {
+      return Ui::print_json(&Out {
          instance: &instance.id,
          mods: &installed,
          problems: &problems,
@@ -110,7 +110,7 @@ fn list(ctx: &Ctx, args: &ModsListArgs) -> Result {
       }
       table.add_row(row);
    }
-   ctx.ui.print_table(&table);
+   Ui::print_table(&table);
    let enabled = installed.iter().filter(|m| m.enabled).count();
    ctx.ui.status(format!(
       "{} mods in {}, {enabled} enabled",
@@ -132,7 +132,7 @@ async fn install(ctx: &Ctx, args: ModsInstallArgs) -> Result {
       .mods
       .iter()
       .map(|m| ModRef::parse(m))
-      .collect::<std::result::Result<Vec<_>, _>>()?;
+      .collect::<StdResult<Vec<_>, _>>()?;
    warn_without_game_version(ctx, &instance);
 
    let progress = ctx.ui.progress();
@@ -176,7 +176,7 @@ async fn update(ctx: &Ctx, args: ModsUpdateArgs) -> Result {
 
    if args.check || updates.is_empty() {
       if ctx.ui.json {
-         return ctx.ui.print_json(&updates);
+         return Ui::print_json(&updates);
       }
       if updates.is_empty() {
          ctx.ui
@@ -200,7 +200,7 @@ async fn update(ctx: &Ctx, args: ModsUpdateArgs) -> Result {
             style.cell("update", if u.to_pin { format!("{to} (pinned)") } else { to }),
          ]);
       }
-      ctx.ui.print_table(&table);
+      Ui::print_table(&table);
       ctx.ui.status(format!("{} update(s) available", updates.len()));
       return Ok(());
    }
@@ -247,7 +247,7 @@ fn remove(ctx: &Ctx, args: &ModsRemoveArgs) -> Result {
    }
    let removed = ctx.lithic.remove_mods(&instance, &args.mods, !args.keep_deps)?;
    if ctx.ui.json {
-      return ctx.ui.print_json(&removed);
+      return Ui::print_json(&removed);
    }
    for m in &removed {
       let why = if targets.contains(m.mod_id()) {
@@ -282,11 +282,12 @@ fn set_enabled(ctx: &Ctx, ids: &[String], enabled: bool) -> Result {
    Ok(())
 }
 
+#[expect(clippy::print_stdout, reason = "mod problems are CLI output")]
 fn check(ctx: &Ctx) -> Result {
    let instance = ctx.instance(None)?;
    let problems = mods::problems(&ctx.lithic.installed_mods(&instance)?);
    if ctx.ui.json {
-      ctx.ui.print_json(&problems)?;
+      Ui::print_json(&problems)?;
    } else if problems.is_empty() {
       ctx.ui.success(format!("no problems found in {}", instance.name));
    } else {
@@ -345,7 +346,7 @@ fn print_report(ctx: &Ctx, instance: &Instance, report: &Report) -> Result {
          unchanged: &'a [String],
          failures: Vec<FailureOut<'a>>,
       }
-      ctx.ui.print_json(&Out {
+      Ui::print_json(&Out {
          changes: &report.changes,
          unchanged: &report.unchanged,
          failures: report
