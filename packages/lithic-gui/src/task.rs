@@ -2,21 +2,28 @@
 
 use std::path::PathBuf;
 
+use lithic_core::Result as CoreResult;
+use rfd::AsyncFileDialog;
+use tokio::task::spawn_blocking;
+
 /// Runs a synchronous core call on the blocking pool. Errors become text,
 /// since messages must be cloneable and core errors are not.
+///
+/// # Errors
+/// Returns the core call's error, or an error if the blocking task panics or is cancelled.
 pub async fn blocking<T, F>(f: F) -> Result<T, String>
 where
-   F: FnOnce() -> lithic_core::Result<T> + Send + 'static,
+   F: FnOnce() -> CoreResult<T> + Send + 'static,
    T: Send + 'static,
 {
-   match tokio::task::spawn_blocking(f).await {
+   match spawn_blocking(f).await {
       Ok(result) => result.map_err(|e| e.to_string()),
       Err(e) => Err(format!("internal error: {e}")),
    }
 }
 
 pub async fn pick_folder(title: String) -> Option<PathBuf> {
-   rfd::AsyncFileDialog::new()
+   AsyncFileDialog::new()
       .set_title(title)
       .pick_folder()
       .await
@@ -24,7 +31,7 @@ pub async fn pick_folder(title: String) -> Option<PathBuf> {
 }
 
 pub async fn pick_pack(title: String) -> Option<PathBuf> {
-   rfd::AsyncFileDialog::new()
+   AsyncFileDialog::new()
       .set_title(title)
       .add_filter("Lithic pack", &["zip"])
       .pick_file()
@@ -33,7 +40,7 @@ pub async fn pick_pack(title: String) -> Option<PathBuf> {
 }
 
 pub async fn save_pack(title: String, name: String) -> Option<PathBuf> {
-   rfd::AsyncFileDialog::new()
+   AsyncFileDialog::new()
       .set_title(title)
       .set_file_name(name)
       .add_filter("Lithic pack", &["zip"])
@@ -43,6 +50,9 @@ pub async fn save_pack(title: String, name: String) -> Option<PathBuf> {
 }
 
 /// Opens a folder in the file manager or a link in the browser.
+///
+/// # Errors
+/// Returns an error if the desktop opener cannot launch a handler for the target.
 pub fn open(target: &str) -> Result<(), String> {
    opener::open(target).map_err(|e| e.to_string())
 }
