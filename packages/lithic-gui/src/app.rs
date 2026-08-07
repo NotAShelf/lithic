@@ -3,12 +3,12 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use futures::{SinkExt, StreamExt};
-use iced::widget::{button, column, container, row, scrollable, space, text};
+use iced::widget::{button, column, container, pick_list, row, scrollable, space, text};
 use iced::{Element, Fill, Subscription, Task, Theme, window};
 use lithic_core::auth::Accounts;
 use lithic_core::game::{Install, Manifest};
 use lithic_core::launch::{Exit, Session};
-use lithic_core::mods::{Change, Report};
+use lithic_core::mods::{Change, InstallOptions, ModRef, Report};
 use lithic_core::{Cancel, Event, Freshness, Instance, Lithic, Reporter, Settings, Step};
 
 use crate::i18n::{t, t1, t2};
@@ -271,6 +271,7 @@ enum Dialog {
    Migrated { notes: Vec<String>, backup: PathBuf },
    MigrationFailed(String),
    Quit,
+   Link(ModRef),
 }
 
 #[derive(Debug, Clone)]
@@ -300,6 +301,8 @@ pub enum Message {
    CloseRequested(window::Id),
    ConfirmQuit,
    CloseDialog,
+   LinkTarget(browse::TargetChoice),
+   LinkInstall,
 
    Instances(instances::Message),
    Instance(instance::Message),
@@ -313,6 +316,8 @@ pub struct App {
    shared: Shared,
    page: Page,
    dialog: Option<Dialog>,
+   queued_link: Option<ModRef>,
+   link_target: Option<String>,
    system_theme: Option<Theme>,
    /// Resolved once per settings or system change; building a preset theme
    /// is too slow to repeat on every frame.
@@ -326,8 +331,8 @@ pub struct App {
 }
 
 impl App {
-   pub fn new(lithic: Lithic) -> (Self, Task<Message>) {
-      let dialog = match lithic.migrate() {
+   pub fn new(lithic: Lithic, link: Option<ModRef>) -> (Self, Task<Message>) {
+      let mut dialog = match lithic.migrate() {
          Ok(Some(report)) => Some(Dialog::Migrated {
             notes: report.notes.iter().map(ToString::to_string).collect(),
             backup: report.backup,
@@ -335,11 +340,19 @@ impl App {
          Ok(None) => None,
          Err(e) => Some(Dialog::MigrationFailed(e.to_string())),
       };
+      let mut queued_link = None;
+      match (&dialog, link) {
+         (None, Some(link)) => dialog = Some(Dialog::Link(link)),
+         (Some(_), link) => queued_link = link,
+         (None, None) => {}
+      }
       let shared = Shared::new(lithic);
       let page = Page::from_setting(&shared.settings.gui.initial_page);
       let mut app = Self {
          page,
          dialog,
+         queued_link,
+         link_target: None,
          system_theme: None,
          theme: None,
          instances: instances::State::default(),
@@ -578,9 +591,50 @@ impl App {
          }
          Message::ConfirmQuit => iced::exit(),
          Message::CloseDialog => {
-            self.dialog = None;
+            self.dialog = self.queued_link.take().map(Dialog::Link);
             Task::none()
          }
+         Message::LinkTarget(choice) => {
+            self.link_target = Some(choice.id);
+            Task::none()
+         }
+         Message::LinkInstall => {
+            let Some(Dialog::Link(link)) = self.dialog.take() else {
+               return Task::none();
+            };
+            let Some(target) = self
+               .link_target
+               .clone()
+               .or_else(|| self.shared.default_instance().map(|i| i.id.clone()))
+            else {
+               return Task::none();
+            };
+            self.link_target = None;
+            let open = Task::done(Message::Navigate(Page::Instance(target.clone())));
+            let pin = link.version.is_some();
+            let refs = vec![link];
+            let op = self.shared.start_op(
+               target.clone(),
+               OpKind::Install,
+               move |lithic, reporter, cancel| async move {
+                  let instance = lithic.instance(&target).map_err(|e| e.to_string())?;
+                  let opts = InstallOptions {
+                     dependencies: true,
+                     pin_versions: pin,
+                     reporter,
+                     cancel,
+                     ..Default::default()
+                  };
+                  lithic
+                     .install_mods(&instance, &refs, &opts)
+                     .await
+                     .map(|r| Outcome::Mods(Summary::from(&r)))
+                     .map_err(|e| e.to_string())
+               },
+            );
+            Task::batch([op, open])
+         }
+
          Message::Instances(m) => self.instances.update(m, &mut self.shared),
          Message::Instance(m) => match &mut self.instance {
             Some(state) => state.update(m, &mut self.shared),
@@ -792,6 +846,59 @@ impl App {
             Message::ConfirmQuit,
             Message::CloseDialog,
          ),
+         Dialog::Link(link) => {
+            let what = link.version.as_ref().map_or_else(
+               || t1("link-mod", "mod", link.id.clone()),
+               |v| t2("link-mod-version", "mod", link.id.clone(), "version", v.clone()),
+            );
+            if self.shared.instances.is_empty() {
+               return widget::dialog(
+                  t("link-title"),
+                  column![text(what), text(t("link-no-instances")).style(style::muted)].spacing(12),
+                  button(text(t("common-close")))
+                     .padding([8, 16])
+                     .on_press(Message::CloseDialog),
+                  480.0,
+               );
+            }
+            let choices: Vec<browse::TargetChoice> = self
+               .shared
+               .instances
+               .iter()
+               .map(|i| browse::TargetChoice {
+                  id: i.id.clone(),
+                  name: i.name.clone(),
+               })
+               .collect();
+            let wanted = self
+               .link_target
+               .clone()
+               .or_else(|| self.shared.default_instance().map(|i| i.id.clone()));
+            let selected = choices.iter().find(|c| Some(&c.id) == wanted.as_ref()).cloned();
+            widget::dialog(
+               t("link-title"),
+               column![
+                  text(what),
+                  widget::field(
+                     t("link-into"),
+                     pick_list(choices, selected, Message::LinkTarget),
+                     None
+                  ),
+               ]
+               .spacing(12),
+               row![
+                  widget::secondary(t("common-cancel"), Some(Message::CloseDialog)),
+                  widget::action(
+                     t("browse-install"),
+                     String::new(),
+                     false,
+                     Some(Message::LinkInstall)
+                  ),
+               ]
+               .spacing(8),
+               480.0,
+            )
+         }
       }
    }
 
@@ -867,9 +974,9 @@ impl App {
    }
 }
 
-pub fn run(lithic: Lithic) -> iced::Result {
+pub fn run(lithic: Lithic, link: Option<ModRef>) -> iced::Result {
    iced::application(
-      move || App::new(lithic.clone()),
+      move || App::new(lithic.clone(), link.clone()),
       App::update,
       App::view,
    )
