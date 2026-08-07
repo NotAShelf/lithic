@@ -268,6 +268,8 @@ fn load_snapshot(lithic: &Lithic) -> lithic_core::Result<Snapshot> {
 
 #[derive(Debug, Clone)]
 enum Dialog {
+   Migrated { notes: Vec<String>, backup: PathBuf },
+   MigrationFailed(String),
    Quit,
 }
 
@@ -325,11 +327,19 @@ pub struct App {
 
 impl App {
    pub fn new(lithic: Lithic) -> (Self, Task<Message>) {
+      let dialog = match lithic.migrate() {
+         Ok(Some(report)) => Some(Dialog::Migrated {
+            notes: report.notes.iter().map(ToString::to_string).collect(),
+            backup: report.backup,
+         }),
+         Ok(None) => None,
+         Err(e) => Some(Dialog::MigrationFailed(e.to_string())),
+      };
       let shared = Shared::new(lithic);
       let page = Page::from_setting(&shared.settings.gui.initial_page);
       let mut app = Self {
          page,
-         dialog: None,
+         dialog,
          system_theme: None,
          theme: None,
          instances: instances::State::default(),
@@ -742,6 +752,38 @@ impl App {
 
    fn dialog_view<'a>(&'a self, dialog: &'a Dialog) -> Element<'a, Message> {
       match dialog {
+         Dialog::Migrated { notes, backup } => {
+            let list = column(notes.iter().map(|n| text(format!("- {n}")).size(13).into())).spacing(4);
+            widget::dialog(
+               t("migrated-title"),
+               column![
+                  text(t("migrated-body")),
+                  container(scrollable(list).height(240))
+                     .style(style::card)
+                     .padding(12),
+                  text(t1("migrated-backup", "path", backup.display().to_string()))
+                     .size(12)
+                     .style(style::muted),
+               ]
+               .spacing(12),
+               button(text(t("common-ok")))
+                  .padding([8, 16])
+                  .on_press(Message::CloseDialog),
+               620.0,
+            )
+         }
+         Dialog::MigrationFailed(error) => widget::dialog(
+            t("migration-failed-title"),
+            column![
+               text(t("migration-failed-body")),
+               text(error).size(13).style(style::muted)
+            ]
+            .spacing(12),
+            button(text(t("common-ok")))
+               .padding([8, 16])
+               .on_press(Message::CloseDialog),
+            560.0,
+         ),
          Dialog::Quit => widget::confirm(
             t("quit-title"),
             t("quit-body"),
