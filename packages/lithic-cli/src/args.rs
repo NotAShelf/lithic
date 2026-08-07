@@ -2,6 +2,8 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
+use crate::style::{CellAttr, CellColor};
+
 #[derive(Debug, Parser)]
 #[command(
    name = "lithic",
@@ -75,10 +77,10 @@ pub enum Command {
    /// Remove mods (same as `mods remove`)
    Remove(ModsRemoveArgs),
 
-   /// Search the ModDB
+   /// Search the `ModDB`
    Search(SearchArgs),
 
-   /// Show a mod's details from the ModDB
+   /// Show a mod's details from the `ModDB`
    Info(InfoArgs),
 
    /// Install and manage game versions
@@ -126,7 +128,7 @@ pub enum InstanceCommand {
    Create(InstanceCreateArgs),
 
    /// Turn an existing game data folder (such as the stock launcher's
-   /// VintagestoryData) into an instance without moving it
+   /// `VintagestoryData`) into an instance without moving it
    Adopt(InstanceAdoptArgs),
 
    /// Change an instance's settings
@@ -233,7 +235,7 @@ pub enum ModsCommand {
    /// List installed mods
    #[command(visible_alias = "ls")]
    List(ModsListArgs),
-   /// Install mods from the ModDB
+   /// Install mods from the `ModDB`
    #[command(visible_alias = "add")]
    Install(ModsInstallArgs),
    /// Update mods, or list available updates with --check
@@ -270,7 +272,7 @@ pub struct ModsListArgs {
 
 #[derive(Debug, Args)]
 pub struct ModsInstallArgs {
-   /// Mod ids, id@version, ModDB links or vintagestorymodinstall:// links
+   /// Mod ids, id@version, `ModDB` links or vintagestorymodinstall:// links
    #[arg(required = true, value_name = "MOD")]
    pub mods: Vec<String>,
    /// Do not install missing dependencies
@@ -442,10 +444,10 @@ pub enum PackCommand {
       id: Option<String>,
       #[arg(short, long, value_name = "FILE")]
       output: Option<PathBuf>,
-      /// Include mod settings (ModConfig)
+      /// Include mod settings (`ModConfig`)
       #[arg(long)]
       config: bool,
-      /// Put every mod file in the pack so it installs without the ModDB
+      /// Put every mod file in the pack so it installs without the `ModDB`
       #[arg(long)]
       bundle_all: bool,
       #[arg(long)]
@@ -465,7 +467,7 @@ pub enum PackCommand {
 pub enum SettingsCommand {
    /// All settings
    Show,
-   /// One setting, by dotted key such as mods.allow_prerelease
+   /// One setting, by dotted key such as `mods.allow_prerelease`
    Get { key: String },
    /// Change a setting
    Set { key: String, value: String },
@@ -490,9 +492,9 @@ pub enum TableCommand {
       part: TablePart,
       column: String,
       #[arg(long, value_enum)]
-      color: Option<crate::style::CellColor>,
+      color: Option<CellColor>,
       #[arg(long, value_enum)]
-      attribute: Option<crate::style::CellAttr>,
+      attribute: Option<CellAttr>,
    },
    /// Go back to the default colours
    Reset {
@@ -508,10 +510,10 @@ pub enum TableName {
 }
 
 impl TableName {
-   pub fn key(self) -> &'static str {
+   pub const fn key(self) -> &'static str {
       match self {
-         TableName::List => "list",
-         TableName::Search => "search",
+         Self::List => "list",
+         Self::Search => "search",
       }
    }
 }
@@ -523,15 +525,20 @@ pub enum TablePart {
 }
 
 impl TablePart {
-   pub fn key(self) -> &'static str {
+   pub const fn key(self) -> &'static str {
       match self {
-         TablePart::Headers => "headers",
-         TablePart::Cells => "cells",
+         Self::Headers => "headers",
+         Self::Cells => "cells",
       }
    }
 }
 
 #[cfg(test)]
+#[expect(
+   clippy::unwrap_used,
+   clippy::panic,
+   reason = "test setup and assertions intentionally fail on error"
+)]
 mod tests {
    use super::*;
    use clap::CommandFactory;
