@@ -10,32 +10,19 @@ homepage.workspace     = true
 repository.workspace   = true
 
 [dependencies]
-async_zip          = { workspace = true }
 chrono             = { workspace = true }
 clap               = { workspace = true }
 clap_complete      = { workspace = true }
-color-eyre         = { workspace = true }
-dirs               = { workspace = true }
-futures            = { workspace = true }
-html2text          = { workspace = true }
-lenient_semver     = { workspace = true }
-num_cpus           = { workspace = true }
-reqwest            = { workspace = true }
-semver             = { workspace = true }
+comfy-table        = { workspace = true }
+indicatif          = { workspace = true }
+lithic-core        = { workspace = true }
 serde              = { workspace = true }
 serde_json         = { workspace = true }
-serde_json5        = { workspace = true }
+shell-words        = { workspace = true }
 tokio              = { workspace = true }
 toml               = { workspace = true }
 tracing            = { workspace = true }
 tracing-subscriber = { workspace = true }
-url                = { workspace = true }
-uuid               = { workspace = true }
-yansi              = { workspace = true }
-#log = {workspace = true}
-comfy-table = { workspace = true }
-csv         = { workspace = true }
-indexmap    = { workspace = true }
-indicatif   = { workspace = true }
-is_elevated = { workspace = true }
-lithic-core = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
