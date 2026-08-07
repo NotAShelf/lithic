@@ -1,3 +1,4 @@
+use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -37,6 +38,7 @@ impl Reporter {
       Self(Some(Arc::new(f)))
    }
 
+   #[must_use]
    pub fn none() -> Self {
       Self(None)
    }
@@ -56,8 +58,8 @@ impl Reporter {
    }
 }
 
-impl std::fmt::Debug for Reporter {
-   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for Reporter {
+   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
       f.write_str("Reporter")
    }
 }
@@ -68,6 +70,7 @@ impl std::fmt::Debug for Reporter {
 pub struct Cancel(Arc<AtomicBool>);
 
 impl Cancel {
+   #[must_use]
    pub fn new() -> Self {
       Self::default()
    }
@@ -76,10 +79,13 @@ impl Cancel {
       self.0.store(true, Ordering::Relaxed);
    }
 
+   #[must_use]
    pub fn is_cancelled(&self) -> bool {
       self.0.load(Ordering::Relaxed)
    }
 
+   /// # Errors
+   /// Returns [`Error::Cancelled`] if cancellation was requested.
    pub fn check(&self) -> Result<()> {
       if self.is_cancelled() {
          Err(Error::Cancelled)
