@@ -6,6 +6,7 @@
 //! `clientsettings.json`. Field names and types of the success response are
 //! read leniently.
 
+use std::error;
 use std::fmt;
 
 use serde_json::{Map, Value};
@@ -30,18 +31,16 @@ pub enum AuthError {
 impl fmt::Display for AuthError {
    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
       match self {
-         AuthError::Network(e) => write!(f, "could not reach the login server: {e}"),
-         AuthError::InvalidCredentials(reason) if reason.is_empty() => {
-            f.write_str("invalid email or password")
-         }
-         AuthError::InvalidCredentials(reason) => write!(f, "login rejected: {reason}"),
-         AuthError::TwoFactorRequired { .. } => f.write_str("a two-factor code is required"),
-         AuthError::Server(e) => write!(f, "unexpected answer from the login server: {e}"),
+         Self::Network(e) => write!(f, "could not reach the login server: {e}"),
+         Self::InvalidCredentials(reason) if reason.is_empty() => f.write_str("invalid email or password"),
+         Self::InvalidCredentials(reason) => write!(f, "login rejected: {reason}"),
+         Self::TwoFactorRequired { .. } => f.write_str("a two-factor code is required"),
+         Self::Server(e) => write!(f, "unexpected answer from the login server: {e}"),
       }
    }
 }
 
-impl std::error::Error for AuthError {}
+impl error::Error for AuthError {}
 
 #[derive(Debug, Clone, Default)]
 pub struct LoginResponse {
@@ -54,6 +53,11 @@ pub struct LoginResponse {
 }
 
 /// Pass `twofa` as `Some((prelogintoken, code))` on the second step.
+///
+/// # Errors
+/// Returns [`AuthError::Network`] if the request fails, [`AuthError::Server`]
+/// for an invalid server response, or a credential or two-factor error reported
+/// by the login server.
 pub async fn gamelogin(
    http: &Http,
    email: &str,
@@ -131,6 +135,11 @@ fn interpret(obj: &Map<String, Value>) -> Result<LoginResponse, AuthError> {
 }
 
 #[cfg(test)]
+#[expect(
+   clippy::unwrap_used,
+   clippy::panic,
+   reason = "test setup and assertions intentionally fail on error"
+)]
 mod tests {
    use super::*;
 

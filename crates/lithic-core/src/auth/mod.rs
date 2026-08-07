@@ -38,12 +38,14 @@ pub struct Accounts {
 }
 
 impl Accounts {
+   #[must_use]
    pub fn get(&self, uid: &str) -> Option<&Account> {
       self.accounts.iter().find(|a| a.uid == uid)
    }
 
    /// The account an instance launches with: its own choice if that account
    /// still exists, otherwise the active one.
+   #[must_use]
    pub fn for_instance(&self, instance_account: Option<&str>) -> Option<&Account> {
       instance_account
          .and_then(|uid| self.get(uid))
@@ -56,18 +58,30 @@ impl Lithic {
       SessionStore::new(self.paths.sessions_dir())
    }
 
+   /// Reads saved accounts, returning an empty list if none exist.
+   ///
+   /// # Errors
+   /// Returns an error if the accounts file cannot be read or parsed.
    pub fn accounts(&self) -> Result<Accounts> {
       Ok(fsutil::read_toml(&self.paths.accounts_file())?.unwrap_or_default())
    }
 
    /// One login attempt. On [`AuthError::TwoFactorRequired`], call again with
    /// `twofa` set to the returned token and the user's code.
+   ///
+   /// # Errors
+   /// Returns an authentication error if login fails, or a storage error if
+   /// the session or accounts file cannot be saved.
    pub async fn login(&self, email: &str, password: &str, twofa: Option<(&str, &str)>) -> Result<Account> {
       let response = client::gamelogin(&self.http, email, password, twofa).await?;
       self.save_login(email, response)
    }
 
    /// Stores a successful login. The first account becomes the active one.
+   ///
+   /// # Errors
+   /// Returns an authentication error if the account ID is missing, or a
+   /// storage error if the session or accounts file cannot be saved.
    pub fn save_login(&self, email: &str, login: LoginResponse) -> Result<Account> {
       if login.uid.is_empty() {
          return Err(Error::Auth(AuthError::Server(
@@ -101,6 +115,10 @@ impl Lithic {
       Ok(saved)
    }
 
+   /// Makes an existing account active.
+   ///
+   /// # Errors
+   /// Returns an error if the account is unknown or its registry cannot be updated.
    pub fn set_active_account(&self, uid: &str) -> Result<()> {
       fsutil::update_toml(&self.paths.accounts_file(), |a: &mut Accounts| {
          if a.get(uid).is_none() {
@@ -113,6 +131,10 @@ impl Lithic {
 
    /// Forgets an account and deletes its session. If it was active, no
    /// account is active afterwards.
+   ///
+   /// # Errors
+   /// Returns an error if the session cannot be deleted or the accounts file
+   /// cannot be read or updated.
    pub fn logout(&self, uid: &str) -> Result<()> {
       self.sessions().delete(uid)?;
       fsutil::update_toml(&self.paths.accounts_file(), |a: &mut Accounts| {
@@ -124,6 +146,7 @@ impl Lithic {
       })
    }
 
+   #[must_use]
    pub fn has_session(&self, uid: &str) -> bool {
       self.sessions().load(uid).is_some()
    }
@@ -131,6 +154,10 @@ impl Lithic {
    /// Writes the instance's account into its `clientsettings.json` before a
    /// launch. Without any account this does nothing and the game shows its
    /// own login screen.
+   ///
+   /// # Errors
+   /// Returns an error if the accounts file cannot be read, the chosen account
+   /// has no saved session, or the game's settings cannot be updated.
    pub fn inject_account(&self, instance: &Instance) -> Result<Option<Account>> {
       let accounts = self.accounts()?;
       let Some(account) = accounts.for_instance(instance.account.as_deref()) else {
@@ -155,6 +182,10 @@ impl Lithic {
 }
 
 #[cfg(test)]
+#[expect(
+   clippy::unwrap_used,
+   reason = "test setup and assertions intentionally fail on error"
+)]
 mod tests {
    use super::*;
 

@@ -2,7 +2,14 @@
 //! `os-keyring` feature is on and a keyring is reachable, otherwise to a file
 //! only the user can read.
 
+use std::fmt;
+use std::fs;
 use std::path::PathBuf;
+#[cfg(all(feature = "os-keyring", not(test)))]
+use std::result;
+
+#[cfg(all(feature = "os-keyring", not(test)))]
+use keyring::v1::{Entry, Error as KeyringError};
 
 use serde::{Deserialize, Serialize};
 
@@ -22,8 +29,8 @@ pub struct Session {
    pub entitlements: String,
 }
 
-impl std::fmt::Debug for Session {
-   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for Session {
+   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
       f.write_str("Session { .. }")
    }
 }
@@ -72,7 +79,7 @@ impl SessionStore {
       {
          return Some(session);
       }
-      let text = std::fs::read_to_string(self.file(uid)).ok()?;
+      let text = fs::read_to_string(self.file(uid)).ok()?;
       serde_json::from_str(&text).ok()
    }
 
@@ -91,12 +98,12 @@ impl SessionStore {
 }
 
 #[cfg(all(feature = "os-keyring", not(test)))]
-fn keyring_entry(uid: &str) -> std::result::Result<keyring::v1::Entry, keyring::v1::Error> {
-   keyring::v1::Entry::new(KEYRING_SERVICE, uid)
+fn keyring_entry(uid: &str) -> result::Result<Entry, KeyringError> {
+   Entry::new(KEYRING_SERVICE, uid)
 }
 
 #[cfg(all(feature = "os-keyring", not(test)))]
-fn keyring_set(uid: &str, json: &str) -> std::result::Result<(), keyring::v1::Error> {
+fn keyring_set(uid: &str, json: &str) -> result::Result<(), KeyringError> {
    keyring_entry(uid)?.set_password(json)
 }
 
@@ -111,12 +118,13 @@ fn keyring_delete(uid: &str) -> Result<()> {
       return Ok(());
    };
    match entry.delete_credential() {
-      Ok(()) | Err(keyring::v1::Error::NoEntry) => Ok(()),
       // No keyring at all means nothing was ever stored there.
-      Err(
-         keyring::v1::Error::NoStorageAccess(_)
-         | keyring::v1::Error::PlatformFailure(_)
-         | keyring::v1::Error::NoDefaultStore,
+      Ok(())
+      | Err(
+         KeyringError::NoEntry
+         | KeyringError::NoStorageAccess(_)
+         | KeyringError::PlatformFailure(_)
+         | KeyringError::NoDefaultStore,
       ) => Ok(()),
       Err(e) => Err(Error::invalid(format!(
          "could not remove the session from the keyring: {e}"
