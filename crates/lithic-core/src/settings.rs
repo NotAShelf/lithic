@@ -33,12 +33,12 @@ impl Default for Settings {
    }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ModSettings {
    /// Offer `-dev`, `-pre` and `-rc` mod releases when a stable one exists.
    pub allow_prerelease: bool,
-   /// How old the cached ModDB index may get before it is fetched again.
+   /// How old the cached `ModDB` index may get before it is fetched again.
    pub index_max_age_hours: u32,
    /// Parallel downloads and API requests.
    pub concurrency: usize,
@@ -54,7 +54,7 @@ impl Default for ModSettings {
    }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BackupSettings {
    /// Copy a mod's old file aside before replacing or removing it.
@@ -75,7 +75,7 @@ impl Default for BackupSettings {
    }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GameSettings {
    /// Where downloaded game builds are unpacked. Defaults to `<data>/game`.
@@ -85,7 +85,7 @@ pub struct GameSettings {
    pub download_dir: Option<PathBuf>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GuiSettings {
    /// `system`, `light`, `dark`, or `preset`.
@@ -114,6 +114,10 @@ pub struct CliSettings {
 }
 
 #[cfg(test)]
+#[expect(
+   clippy::unwrap_used,
+   reason = "test setup and assertions intentionally fail on error"
+)]
 mod tests {
    use super::*;
 
