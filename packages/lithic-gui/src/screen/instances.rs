@@ -5,11 +5,12 @@ use iced::widget::{button, column, pick_list, row, scrollable, text, text_input}
 use iced::{Center, Element, Fill, Task};
 use lithic_core::Instance;
 use lithic_core::instance::NewInstance;
+use lithic_core::mods::InstallOptions;
 
-use crate::app::{Message as AppMessage, OpKind, Outcome, Page, Shared};
+use crate::app::{Message as AppMessage, OpKind, Outcome, Page, Shared, Summary};
 use crate::i18n::{t, t1, t2};
 use crate::style::{self, Tone};
-use crate::task::{blocking, pick_folder};
+use crate::task::{blocking, pick_folder, pick_pack};
 use crate::widget;
 
 /// A game version offered when creating an instance.
@@ -89,6 +90,8 @@ pub enum Message {
    Open(String),
    Launch(String),
    Stop(String),
+   Import,
+   ImportPicked(PathBuf),
 }
 
 impl State {
@@ -192,12 +195,35 @@ impl State {
          Message::Open(id) => return Task::done(AppMessage::Navigate(Page::Instance(id))),
          Message::Launch(id) => return Task::done(AppMessage::Launch(id)),
          Message::Stop(id) => return Task::done(AppMessage::Stop(id)),
+         Message::Import => {
+            return Task::future(pick_pack(t("instances-import-pick")))
+               .and_then(|p| Task::done(AppMessage::Instances(Message::ImportPicked(p))));
+         }
+         Message::ImportPicked(path) => {
+            let key = format!("import:{}", path.display());
+            return shared.start_op(key, OpKind::Import, move |lithic, reporter, cancel| async move {
+               let opts = InstallOptions {
+                  reporter,
+                  cancel,
+                  ..InstallOptions::default()
+               };
+               lithic
+                  .import_pack(&path, None, &opts)
+                  .await
+                  .map(|r| Outcome::Imported {
+                     instance: r.instance.id.clone(),
+                     summary: Summary::from(&r.install),
+                  })
+                  .map_err(|e| e.to_string())
+            });
+         }
       }
       Task::none()
    }
 
    pub fn view<'a>(&'a self, shared: &'a Shared) -> Element<'a, Message> {
       let actions = row![
+         widget::secondary(t("instances-import"), Some(Message::Import)),
          button(text(t("instances-new")))
             .padding([8, 16])
             .style(button::primary)
@@ -205,7 +231,19 @@ impl State {
       ]
       .spacing(8);
 
-      let mut list = column![].spacing(10);
+      let importing: Vec<Element<Message>> = shared
+         .busy
+         .iter()
+         .filter(|(k, _)| k.starts_with("import:"))
+         .map(|(_, b)| {
+            widget::notice(
+               text(format!("{} {}", t("instances-importing"), b.label())),
+               Tone::Neutral,
+            )
+         })
+         .collect();
+
+      let mut list = column(importing).spacing(10);
       for (id, error) in &shared.broken {
          list = list.push(widget::notice(
             text(t2("instances-broken", "id", id.clone(), "error", error.clone())),

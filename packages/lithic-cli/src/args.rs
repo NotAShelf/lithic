@@ -95,6 +95,10 @@ pub enum Command {
    #[command(subcommand)]
    Account(AccountCommand),
 
+   /// Export and import modpacks
+   #[command(subcommand)]
+   Pack(PackCommand),
+
    /// Show and change settings
    #[command(subcommand, visible_alias = "config")]
    Settings(SettingsCommand),
@@ -425,6 +429,33 @@ pub enum AccountCommand {
    Switch { account: String },
    /// Forget an account and its session
    Logout { account: String },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum PackCommand {
+   /// Write an instance to a pack file
+   Export {
+      /// Instance; defaults to the selected one
+      id: Option<String>,
+      #[arg(short, long, value_name = "FILE")]
+      output: Option<PathBuf>,
+      /// Include mod settings (ModConfig)
+      #[arg(long)]
+      config: bool,
+      /// Put every mod file in the pack so it installs without the ModDB
+      #[arg(long)]
+      bundle_all: bool,
+      #[arg(long)]
+      description: Option<String>,
+   },
+   /// Create a new instance from a pack file
+   Import {
+      file: PathBuf,
+      #[arg(long)]
+      name: Option<String>,
+   },
+   /// Show what a pack contains
+   Show { file: PathBuf },
 }
 
 #[derive(Debug, Subcommand)]

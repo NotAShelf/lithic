@@ -10,6 +10,7 @@ pub mod launch;
 pub mod moddb;
 pub mod modinfo;
 pub mod mods;
+pub mod pack;
 pub mod paths;
 pub mod progress;
 pub mod settings;

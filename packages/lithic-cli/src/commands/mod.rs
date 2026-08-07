@@ -4,6 +4,7 @@ mod game;
 mod instance;
 mod launch;
 mod mods;
+mod pack;
 mod settings;
 
 use lithic_core::Freshness;
@@ -26,6 +27,7 @@ pub async fn run(ctx: &Ctx, command: Command) -> Result {
       Command::Launch(args) => launch::launch(ctx, args).await,
       Command::Logs(args) => launch::logs(ctx, &args),
       Command::Account(cmd) => account::run(ctx, cmd).await,
+      Command::Pack(cmd) => pack::run(ctx, cmd).await,
       Command::Settings(cmd) => settings::run(ctx, cmd),
       Command::Completions { .. } => Ok(()),
    }

@@ -75,6 +75,10 @@ impl Paths {
       self.data.join("backups")
    }
 
+   pub fn exports_dir(&self) -> PathBuf {
+      self.data.join("exports")
+   }
+
    pub fn downloads_dir(&self) -> PathBuf {
       self.cache.join("downloads")
    }
