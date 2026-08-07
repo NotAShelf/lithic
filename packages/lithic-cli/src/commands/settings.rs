@@ -1,13 +1,16 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::result::Result as StdResult;
 
 use comfy_table::Cell;
 use lithic_core::Settings;
 use lithic_core::paths::expand_home;
+use toml::Value;
 
 use crate::Ctx;
 use crate::args::{SettingsCommand, TableCommand, TableName, TablePart};
-use crate::style::TableStyle;
-use crate::ui::{Result, fail};
+use crate::style::{CellAttr, CellColor, TableStyle};
+use crate::ui::{Result, Ui, fail};
 
 /// Settings that can be read and changed from the command line.
 const KEYS: &[(&str, &str)] = &[
@@ -33,12 +36,13 @@ const KEYS: &[(&str, &str)] = &[
    ("gui.initial_page", "page the GUI opens on"),
 ];
 
+#[expect(clippy::print_stdout, reason = "a queried setting value is CLI output")]
 pub fn run(ctx: &Ctx, cmd: SettingsCommand) -> Result {
    match cmd {
       SettingsCommand::Show => {
          let settings = ctx.lithic.settings()?;
          if ctx.ui.json {
-            return ctx.ui.print_json(&settings);
+            return Ui::print_json(&settings);
          }
          let mut table = ctx.ui.table();
          table.set_header(vec!["Key", "Value", "Meaning"]);
@@ -49,7 +53,7 @@ pub fn run(ctx: &Ctx, cmd: SettingsCommand) -> Result {
                Cell::new(meaning),
             ]);
          }
-         ctx.ui.print_table(&table);
+         Ui::print_table(&table);
          Ok(())
       }
       SettingsCommand::Get { key } => {
@@ -65,13 +69,12 @@ pub fn run(ctx: &Ctx, cmd: SettingsCommand) -> Result {
                error = Some(e);
             }
          })?;
-         match error {
-            Some(e) => fail(e),
-            None => {
-               ctx.ui
-                  .success(format!("{key} = {}", get(&ctx.lithic.settings()?, &key)));
-               Ok(())
-            }
+         if let Some(e) = error {
+            fail(e)
+         } else {
+            ctx.ui
+               .success(format!("{key} = {}", get(&ctx.lithic.settings()?, &key)));
+            Ok(())
          }
       }
       SettingsCommand::Unset { key } => {
@@ -95,28 +98,23 @@ pub fn run(ctx: &Ctx, cmd: SettingsCommand) -> Result {
                settings
                   .game
                   .install_dir
-                  .map(expand_home)
-                  .unwrap_or_else(|| p.game_dir()),
+                  .map_or_else(|| p.game_dir(), expand_home),
             ),
             (
                "Backups",
-               settings
-                  .backups
-                  .dir
-                  .map(expand_home)
-                  .unwrap_or_else(|| p.backups_dir()),
+               settings.backups.dir.map_or_else(|| p.backups_dir(), expand_home),
             ),
             ("Cache", p.cache.clone()),
          ];
          if ctx.ui.json {
-            let map: std::collections::BTreeMap<&str, &PathBuf> = rows.iter().map(|(k, v)| (*k, v)).collect();
-            return ctx.ui.print_json(&map);
+            let map: BTreeMap<&str, &PathBuf> = rows.iter().map(|(k, v)| (*k, v)).collect();
+            return Ui::print_json(&map);
          }
          let mut table = ctx.ui.table();
          for (k, v) in rows {
             table.add_row(vec![Cell::new(k), Cell::new(v.display())]);
          }
-         ctx.ui.print_table(&table);
+         Ui::print_table(&table);
          Ok(())
       }
       SettingsCommand::Table(cmd) => table(ctx, cmd),
@@ -154,9 +152,9 @@ fn get(s: &Settings, key: &str) -> String {
 }
 
 /// Sets `key` from text, or back to its default when `value` is `None`.
-fn set(s: &mut Settings, key: &str, value: Option<&str>) -> std::result::Result<(), String> {
+fn set(s: &mut Settings, key: &str, value: Option<&str>) -> StdResult<(), String> {
    let d = Settings::default();
-   let flag = |v: Option<&str>, default: bool| -> std::result::Result<bool, String> {
+   let flag = |v: Option<&str>, default: bool| -> StdResult<bool, String> {
       match v.map(|v| v.trim().to_ascii_lowercase()) {
          None => Ok(default),
          Some(v) if ["true", "yes", "on", "1"].contains(&v.as_str()) => Ok(true),
@@ -164,14 +162,11 @@ fn set(s: &mut Settings, key: &str, value: Option<&str>) -> std::result::Result<
          Some(v) => Err(format!("`{v}` is not true or false")),
       }
    };
-   let number = |v: Option<&str>, default: u64, min: u64| -> std::result::Result<u64, String> {
-      match v {
-         None => Ok(default),
-         Some(v) => match v.trim().parse::<u64>() {
-            Ok(n) if n >= min => Ok(n),
-            _ => Err(format!("`{v}` must be a whole number of at least {min}")),
-         },
-      }
+   let number = |v: Option<&str>, default: u64, min: u64| -> StdResult<u64, String> {
+      v.map_or(Ok(default), |v| match v.trim().parse::<u64>() {
+         Ok(n) if n >= min => Ok(n),
+         _ => Err(format!("`{v}` must be a whole number of at least {min}")),
+      })
    };
    let dir = |v: Option<&str>| v.filter(|v| !v.trim().is_empty()).map(|v| expand_home(v.trim()));
    let text =
@@ -214,7 +209,7 @@ fn table(ctx: &Ctx, cmd: TableCommand) -> Result {
       TableCommand::Show => {
          let settings = ctx.lithic.settings()?;
          if ctx.ui.json {
-            return ctx.ui.print_json(&settings.cli.table);
+            return Ui::print_json(&settings.cli.table);
          }
          let columns = [
             (
@@ -233,7 +228,7 @@ fn table(ctx: &Ctx, cmd: TableCommand) -> Result {
             for col in cols {
                let describe = |part: &str| {
                   let look = style.look(part, col);
-                  [look.color.map(|c| c.key()), look.attr.map(|a| a.key())]
+                  [look.color.map(CellColor::key), look.attr.map(CellAttr::key)]
                      .into_iter()
                      .flatten()
                      .collect::<Vec<_>>()
@@ -247,7 +242,7 @@ fn table(ctx: &Ctx, cmd: TableCommand) -> Result {
                ]);
             }
          }
-         ctx.ui.print_table(&out);
+         Ui::print_table(&out);
          Ok(())
       }
       TableCommand::Set {
@@ -263,10 +258,10 @@ fn table(ctx: &Ctx, cmd: TableCommand) -> Result {
          ctx.lithic.update_settings(|s| {
             let section = section_mut(&mut s.cli.table, table, part);
             if let Some(c) = color {
-               section.insert(format!("{column}.color"), toml::Value::String(c.key().into()));
+               section.insert(format!("{column}.color"), Value::String(c.key().into()));
             }
             if let Some(a) = attribute {
-               section.insert(format!("{column}.attribute"), toml::Value::String(a.key().into()));
+               section.insert(format!("{column}.attribute"), Value::String(a.key().into()));
             }
          })?;
          ctx.ui
@@ -289,26 +284,29 @@ fn table(ctx: &Ctx, cmd: TableCommand) -> Result {
 fn section_mut(root: &mut toml::Table, table: TableName, part: TablePart) -> &mut toml::Table {
    let t = root
       .entry(table.key())
-      .or_insert_with(|| toml::Value::Table(toml::Table::new()));
-   if !t.is_table() {
-      *t = toml::Value::Table(toml::Table::new());
-   }
-   let toml::Value::Table(t) = t else {
-      unreachable!("replaced with a table above")
-   };
-   let p = t
+      .or_insert_with(|| Value::Table(toml::Table::new()));
+   let p = ensure_table(t)
       .entry(part.key())
-      .or_insert_with(|| toml::Value::Table(toml::Table::new()));
-   if !p.is_table() {
-      *p = toml::Value::Table(toml::Table::new());
+      .or_insert_with(|| Value::Table(toml::Table::new()));
+   ensure_table(p)
+}
+
+fn ensure_table(value: &mut Value) -> &mut toml::Table {
+   match value {
+      Value::Table(table) => table,
+      value => {
+         *value = Value::Table(toml::Table::new());
+         ensure_table(value)
+      }
    }
-   let toml::Value::Table(p) = p else {
-      unreachable!("replaced with a table above")
-   };
-   p
 }
 
 #[cfg(test)]
+#[expect(
+   clippy::unwrap_used,
+   clippy::panic,
+   reason = "test setup and assertions intentionally fail on error"
+)]
 mod tests {
    use super::*;
 
@@ -318,7 +316,7 @@ mod tests {
          let mut s = Settings::default();
          let sample = match *key {
             k if k.ends_with("allow_prerelease") || k.ends_with("enabled") => "true",
-            k if k.ends_with("_dir") || k.ends_with(".dir") => "/tmp/x",
+            k if k.ends_with("_dir") || k.rsplit('.').next() == Some("dir") => "/tmp/x",
             "gui.theme_mode" => "dark",
             k if k.starts_with("gui.") => "x",
             _ => "7",
