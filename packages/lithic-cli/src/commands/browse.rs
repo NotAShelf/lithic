@@ -5,7 +5,7 @@ use lithic_core::{Freshness, version};
 
 use crate::Ctx;
 use crate::args::{InfoArgs, SearchArgs, SortArg};
-use crate::ui::{Result, format_count};
+use crate::ui::{Result, Ui, format_count};
 
 pub async fn search(ctx: &Ctx, args: SearchArgs) -> Result {
    let query = args.query.join(" ");
@@ -64,7 +64,7 @@ pub async fn search(ctx: &Ctx, args: SearchArgs) -> Result {
       .collect();
 
    if ctx.ui.json {
-      return ctx.ui.print_json(&hits);
+      return Ui::print_json(&hits);
    }
    if hits.is_empty() {
       ctx.ui.status("No mods found.");
@@ -88,20 +88,21 @@ pub async fn search(ctx: &Ctx, args: SearchArgs) -> Result {
          style.cell("summary", m.summary.as_deref().unwrap_or("")),
       ]);
    }
-   ctx.ui.print_table(&table);
+   Ui::print_table(&table);
    if let Some(game) = game {
       ctx.ui.status(format!(
          "Showing mods with releases for {}.x; use --any-version to see all",
-         version::minor(&game).map_or(game.clone(), |(a, b)| format!("{a}.{b}"))
+         version::minor(&game).map_or_else(|| game.clone(), |(a, b)| format!("{a}.{b}"))
       ));
    }
    Ok(())
 }
 
+#[expect(clippy::print_stdout, reason = "mod details and changelogs are CLI output")]
 pub async fn info(ctx: &Ctx, args: InfoArgs) -> Result {
    let details = ctx.lithic.moddb.mod_details(&args.id).await?;
    if ctx.ui.json {
-      return ctx.ui.print_json(&details);
+      return Ui::print_json(&details);
    }
    let instance = ctx.instance(None).ok();
    let settings = ctx.lithic.settings()?;
@@ -149,7 +150,7 @@ pub async fn info(ctx: &Ctx, args: InfoArgs) -> Result {
       };
       row(&format!("For {}", instance.name), verdict);
    }
-   ctx.ui.print_table(&table);
+   Ui::print_table(&table);
 
    let description = moddb::html_to_text(&details.text, 100);
    if !description.is_empty() {
@@ -168,7 +169,7 @@ pub async fn info(ctx: &Ctx, args: InfoArgs) -> Result {
          ]);
       }
       println!();
-      ctx.ui.print_table(&releases);
+      Ui::print_table(&releases);
    }
 
    if args.changelog {
@@ -183,7 +184,7 @@ pub async fn info(ctx: &Ctx, args: InfoArgs) -> Result {
    Ok(())
 }
 
-fn freshness(refresh: bool) -> Freshness {
+const fn freshness(refresh: bool) -> Freshness {
    if refresh {
       Freshness::Refresh
    } else {
