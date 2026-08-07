@@ -13,10 +13,13 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use tokio::task::spawn_blocking;
+use zip::result::ZipError;
+use zip::write::SimpleFileOptions;
 
 use crate::error::{Error, IoContext, Result};
 use crate::instance::{Instance, NewInstance};
@@ -45,7 +48,7 @@ pub struct Manifest {
 pub struct PackMod {
    pub id: String,
    pub version: String,
-   /// Set for mods fetched from the ModDB on import.
+   /// Set for mods fetched from the `ModDB` on import.
    #[serde(default, skip_serializing_if = "Option::is_none")]
    pub moddb_id: Option<i64>,
    /// Set for mods shipped inside the pack under `mods/`.
@@ -55,12 +58,15 @@ pub struct PackMod {
    pub enabled: bool,
 }
 
-fn yes() -> bool {
+const fn yes() -> bool {
    true
 }
 
-#[allow(clippy::trivially_copy_pass_by_ref)]
-fn is_true(b: &bool) -> bool {
+#[expect(
+   clippy::trivially_copy_pass_by_ref,
+   reason = "serde skip_serializing_if requires a borrowed field"
+)]
+const fn is_true(b: &bool) -> bool {
    *b
 }
 
@@ -69,7 +75,7 @@ pub struct ExportOptions {
    pub description: Option<String>,
    /// Ship mod settings from the data directory.
    pub include_config: bool,
-   /// Ship every mod file, even those on the ModDB. Makes the pack larger but
+   /// Ship every mod file, even those on the `ModDB`. Makes the pack larger but
    /// installable offline.
    pub bundle_all: bool,
 }
@@ -82,8 +88,10 @@ pub struct ImportResult {
 }
 
 impl Lithic {
-   /// Writes `instance` as a pack to `dest`. Checks the ModDB for each mod to
+   /// Writes `instance` as a pack to `dest`. Checks the `ModDB` for each mod to
    /// decide whether to reference it or ship its file.
+   /// # Errors
+   /// Returns an error if mods cannot be read, a lookup fails, or the pack cannot be written.
    pub async fn export_pack(
       &self,
       instance: &Instance,
@@ -129,7 +137,7 @@ impl Lithic {
       let include_config = opts.include_config;
       let dest = dest.to_path_buf();
       let manifest_out = manifest.clone();
-      tokio::task::spawn_blocking(move || {
+      spawn_blocking(move || {
          write_pack(
             &dest,
             &manifest_out,
@@ -143,12 +151,16 @@ impl Lithic {
    }
 
    /// Reads a pack's manifest without importing it.
+   /// # Errors
+   /// Returns an error if the archive or manifest is invalid, unreadable, or unsupported.
    pub fn read_pack(&self, path: &Path) -> Result<Manifest> {
       let mut archive = open_zip(path)?;
       read_manifest(&mut archive, path)
    }
 
    /// Creates a new instance from a pack. `name` overrides the pack's name.
+   /// # Errors
+   /// Returns an error if the pack cannot be read, the instance cannot be created, or installation fails.
    pub async fn import_pack(
       &self,
       path: &Path,
@@ -172,7 +184,7 @@ impl Lithic {
             .iter()
             .filter_map(|m| Some((m.file.clone()?, m.enabled)))
             .collect();
-         let bundled = tokio::task::spawn_blocking(move || {
+         let bundled = spawn_blocking(move || {
             unpack_files(&archive_path, &mods_dir, &disabled_dir, &data_dir, &bundled_mods)
          })
          .await
@@ -298,8 +310,8 @@ fn write_pack(
 
    let result = (|| {
       let mut zip = zip::ZipWriter::new(fs::File::create(&part).at(&part)?);
-      let options = zip::write::SimpleFileOptions::default();
-      let zip_err = |e: zip::result::ZipError| Error::invalid(format!("writing {}: {e}", dest.display()));
+      let options = SimpleFileOptions::default();
+      let zip_err = |e: ZipError| Error::invalid(format!("writing {}: {e}", dest.display()));
 
       let json = serde_json::to_vec_pretty(manifest).map_err(|e| Error::parse(MANIFEST_FILE, e))?;
       zip.start_file(MANIFEST_FILE, options).map_err(zip_err)?;
@@ -336,9 +348,9 @@ fn add_path(
    zip: &mut zip::ZipWriter<fs::File>,
    path: &Path,
    name: &str,
-   options: zip::write::SimpleFileOptions,
+   options: SimpleFileOptions,
 ) -> Result<()> {
-   let zip_err = |e: zip::result::ZipError| Error::invalid(format!("adding {name}: {e}"));
+   let zip_err = |e: ZipError| Error::invalid(format!("adding {name}: {e}"));
    if path.is_dir() {
       for entry in fs::read_dir(path).at(path)? {
          let entry = entry.at(path)?;
@@ -349,7 +361,7 @@ fn add_path(
    }
    zip.start_file(name, options).map_err(zip_err)?;
    let mut file = fs::File::open(path).at(path)?;
-   std::io::copy(&mut file, zip).at(path)?;
+   io::copy(&mut file, zip).at(path)?;
    Ok(())
 }
 
@@ -406,15 +418,21 @@ fn unpack_files(
          fs::create_dir_all(parent).at(parent)?;
       }
       let mut out = fs::File::create(&target).at(&target)?;
-      std::io::copy(&mut entry, &mut out).at(&target)?;
+      io::copy(&mut entry, &mut out).at(&target)?;
    }
    Ok(count + folder_mods.len())
 }
 
 #[cfg(test)]
+#[expect(
+   clippy::unwrap_used,
+   reason = "test setup and assertions intentionally fail on error"
+)]
 mod tests {
    use super::*;
+   use crate::Paths;
    use crate::mods::tests::{setup, write_mod_zip};
+   use tokio::runtime::Runtime;
 
    #[test]
    fn pack_round_trip_offline() {
@@ -434,7 +452,7 @@ mod tests {
       fs::create_dir_all(i.data_dir().join("Saves")).unwrap();
 
       let dest = d.path().join("out/pack.zip");
-      let rt = tokio::runtime::Runtime::new().unwrap();
+      let rt = Runtime::new().unwrap();
       let manifest = rt
          .block_on(l.export_pack(
             &i,
@@ -469,7 +487,7 @@ mod tests {
          "old.zip",
          r#"{"name":"My Pack","modid":"mypack","type":"content","dependencies":{"game":"1.19.8","carryon":"1.6.0","anything":"*"}}"#,
       );
-      let l = Lithic::new(crate::Paths::rooted(d.path())).unwrap();
+      let l = Lithic::new(Paths::rooted(d.path())).unwrap();
       let m = l.read_pack(&path).unwrap();
       assert_eq!(m.name, "My Pack");
       assert_eq!(m.game_version.as_deref(), Some("1.19.8"));
@@ -486,7 +504,7 @@ mod tests {
       let d = tempfile::tempdir().unwrap();
       let path = d.path().join("evil.zip");
       let mut w = zip::ZipWriter::new(fs::File::create(&path).unwrap());
-      let o = zip::write::SimpleFileOptions::default();
+      let o = SimpleFileOptions::default();
       w.start_file(MANIFEST_FILE, o).unwrap();
       w.write_all(br#"{"format":1,"name":"x","mods":[{"id":"a","version":"1","file":"a.zip"}]}"#)
          .unwrap();
