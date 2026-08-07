@@ -12,3 +12,6 @@ repository.workspace   = true
 [dependencies]
 lithic-cli = { workspace = true }
 lithic-gui = { workspace = true }
+
+[lints]
+workspace = true

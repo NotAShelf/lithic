@@ -39,3 +39,6 @@ tempfile = { workspace = true }
 # no keyring answers, sessions go to a file only the user can read.
 default    = [ "os-keyring" ]
 os-keyring = [ "dep:keyring" ]
+
+[lints]
+workspace = true
