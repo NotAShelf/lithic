@@ -3,13 +3,13 @@ use std::path::PathBuf;
 use comfy_table::Cell;
 use lithic_core::instance::NewInstance;
 use lithic_core::paths;
-use lithic_core::{Error, Instance};
+use lithic_core::{Error, Instance, Kind};
 use serde::Serialize;
 
 use super::{resolve_game_version, warn_if_not_installed};
 use crate::Ctx;
 use crate::args::{InstanceCommand, InstanceCreateArgs, InstanceEditArgs, InstancePathArgs};
-use crate::ui::{Result, fail, format_duration, format_time};
+use crate::ui::{Failure, Result, Ui, fail, format_duration, format_time};
 
 #[derive(Serialize)]
 struct InstanceView<'a> {
@@ -111,7 +111,7 @@ fn list(ctx: &Ctx) -> Result {
       .map(|i| view(ctx, i, selected.as_deref()))
       .collect();
    if ctx.ui.json {
-      return ctx.ui.print_json(&views);
+      return Ui::print_json(&views);
    }
    if views.is_empty() {
       ctx.ui
@@ -129,16 +129,11 @@ fn list(ctx: &Ctx) -> Result {
          Cell::new(&i.name),
          Cell::new(i.game_version.as_deref().unwrap_or("-")),
          Cell::new(v.mods),
-         Cell::new(
-            i.stats
-               .last_played_at
-               .map(format_time)
-               .unwrap_or_else(|| "never".into()),
-         ),
+         Cell::new(i.stats.last_played_at.map_or_else(|| "never".into(), format_time)),
          Cell::new(format_duration(i.stats.play_time_ms)),
       ]);
    }
-   ctx.ui.print_table(&table);
+   Ui::print_table(&table);
    Ok(())
 }
 
@@ -149,7 +144,7 @@ fn view<'a>(ctx: &Ctx, instance: &'a Instance, selected: Option<&str>) -> Instan
       selected: selected == Some(instance.id.as_str()),
       resolved_data_dir: instance.data_dir(),
       resolved_mods_dir: instance.mods_dir(),
-      mods: ctx.lithic.installed_mods(instance).map(|m| m.len()).unwrap_or(0),
+      mods: ctx.lithic.installed_mods(instance).map_or(0, |m| m.len()),
    }
 }
 
@@ -158,28 +153,28 @@ fn show(ctx: &Ctx, id: Option<&str>) -> Result {
    let selected = ctx.lithic.settings()?.active_instance;
    let v = view(ctx, &instance, selected.as_deref());
    if ctx.ui.json {
-      return ctx.ui.print_json(&v);
+      return Ui::print_json(&v);
    }
 
    let accounts = ctx.lithic.accounts()?;
-   let account = accounts
-      .for_instance(instance.account.as_deref())
-      .map(|a| {
+   let account = accounts.for_instance(instance.account.as_deref()).map_or_else(
+      || "none, the game will ask you to log in".into(),
+      |a| {
          let how = if instance.account.as_deref() == Some(a.uid.as_str()) {
             ""
          } else {
             " (active account)"
          };
          format!("{}{how}", a.playername)
-      })
-      .unwrap_or_else(|| "none, the game will ask you to log in".into());
-   let game = match &instance.game_version {
-      Some(v) => match ctx.lithic.game_install(v) {
+      },
+   );
+   let game = instance.game_version.as_ref().map_or_else(
+      || "not set".to_string(),
+      |v| match ctx.lithic.game_install(v) {
          Ok(install) => format!("{v} ({})", install.path.display()),
          Err(_) => format!("{v} (not installed)"),
       },
-      None => "not set".to_string(),
-   };
+   );
 
    let mut rows: Vec<(&str, String)> = vec![
       ("Id", instance.id.clone()),
@@ -195,8 +190,7 @@ fn show(ctx: &Ctx, id: Option<&str>) -> Result {
          instance
             .stats
             .last_played_at
-            .map(format_time)
-            .unwrap_or_else(|| "never".into()),
+            .map_or_else(|| "never".into(), format_time),
       ),
       ("Play time", format_duration(instance.stats.play_time_ms)),
    ];
@@ -214,7 +208,7 @@ fn show(ctx: &Ctx, id: Option<&str>) -> Result {
    for (k, val) in rows {
       table.add_row(vec![Cell::new(k), Cell::new(val)]);
    }
-   ctx.ui.print_table(&table);
+   Ui::print_table(&table);
    Ok(())
 }
 
@@ -234,7 +228,7 @@ async fn create(ctx: &Ctx, args: InstanceCreateArgs) -> Result {
       ctx.lithic.set_active_instance(Some(&instance.id))?;
    }
    if ctx.ui.json {
-      return ctx.ui.print_json(&view(ctx, &instance, Some(&instance.id)));
+      return Ui::print_json(&view(ctx, &instance, Some(&instance.id)));
    }
    ctx.ui.success(format!(
       "created instance `{}` in {}",
@@ -264,7 +258,7 @@ async fn edit(ctx: &Ctx, args: InstanceEditArgs) -> Result {
             .accounts
             .iter()
             .find(|a| a.uid == *wanted || a.playername.eq_ignore_ascii_case(wanted))
-            .ok_or_else(|| Error::not_found(lithic_core::Kind::Account, wanted.clone()))?;
+            .ok_or_else(|| Error::not_found(Kind::Account, wanted.clone()))?;
          Some(found.uid.clone())
       }
       None => None,
@@ -287,7 +281,7 @@ async fn edit(ctx: &Ctx, args: InstanceEditArgs) -> Result {
 
    ctx.lithic.update_instance(&instance.id, |i| {
       if let Some(name) = &args.name {
-         i.name = name.clone();
+         i.name.clone_from(name);
       }
       if let Some(v) = &game {
          i.game_version = Some(v.clone());
@@ -308,10 +302,10 @@ async fn edit(ctx: &Ctx, args: InstanceEditArgs) -> Result {
          i.mods_dir = None;
       }
       if let Some(a) = &game_args {
-         i.launch.args = a.clone();
+         i.launch.args.clone_from(a);
       }
       if let Some(w) = &wrapper {
-         i.launch.wrapper = w.clone();
+         i.launch.wrapper.clone_from(w);
       }
       for (k, v) in &env_changes {
          i.launch.env.insert(k.clone(), v.clone());
@@ -329,9 +323,10 @@ async fn edit(ctx: &Ctx, args: InstanceEditArgs) -> Result {
 }
 
 fn parse_command_line(line: &str) -> Result<Vec<String>> {
-   shell_words::split(line).map_err(|e| crate::ui::Failure(format!("cannot split `{line}`: {e}")))
+   shell_words::split(line).map_err(|e| Failure(format!("cannot split `{line}`: {e}")))
 }
 
+#[expect(clippy::print_stdout, reason = "the resolved instance path is CLI output")]
 fn path(ctx: &Ctx, args: &InstancePathArgs) -> Result {
    let instance = ctx.instance(args.id.as_deref())?;
    let path = if args.data {
@@ -341,7 +336,7 @@ fn path(ctx: &Ctx, args: &InstancePathArgs) -> Result {
    } else if args.logs {
       instance.logs_dir()
    } else {
-      instance.dir.clone()
+      instance.dir
    };
    println!("{}", path.display());
    Ok(())
