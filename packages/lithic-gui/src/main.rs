@@ -1,12 +1,18 @@
 // Without this, Windows opens a console window next to the GUI.
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
-fn main() -> std::process::ExitCode {
+use std::process::ExitCode;
+
+#[expect(
+   clippy::print_stderr,
+   reason = "startup failures must reach the invoking terminal"
+)]
+fn main() -> ExitCode {
    match lithic_gui::run() {
-      Ok(()) => std::process::ExitCode::SUCCESS,
+      Ok(()) => ExitCode::SUCCESS,
       Err(e) => {
          eprintln!("error: {e}");
-         std::process::ExitCode::FAILURE
+         ExitCode::FAILURE
       }
    }
 }
