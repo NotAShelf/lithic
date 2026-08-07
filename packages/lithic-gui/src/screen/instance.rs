@@ -9,6 +9,7 @@ use iced::widget::{
 use iced::{Center, Element, Fill, Task};
 use lithic_core::launch::read_tail;
 use lithic_core::mods::{self, InstallOptions, InstalledMod, ModRef, Problem, Update};
+use lithic_core::pack::ExportOptions;
 use lithic_core::{Cancel, Instance};
 
 use super::instances::{GameChoice, game_choices};
@@ -16,7 +17,7 @@ use super::{describe_problem, format_duration, format_time, installable_fix};
 use crate::app::{Message as AppMessage, OpKind, Outcome, Page, Shared, Summary};
 use crate::i18n::{t, t1, t2};
 use crate::style::{self, Tone};
-use crate::task::{blocking, pick_folder};
+use crate::task::{blocking, pick_folder, save_pack};
 use crate::widget;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,6 +64,10 @@ enum Confirm {
    Clone {
       name: String,
       with_saves: bool,
+   },
+   Export {
+      config: bool,
+      bundle_all: bool,
    },
 }
 
@@ -213,11 +218,15 @@ pub enum Message {
    AskClone,
    CloneName(String),
    CloneSaves(bool),
+   AskExport,
+   ExportConfig(bool),
+   ExportBundle(bool),
    CloseConfirm,
    Confirmed,
    Removed(Result<Vec<String>, String>),
    Deleted(Result<(), String>),
    Cloned(Result<Instance, String>),
+   ExportTo(PathBuf),
 
    FormName(String),
    FormGame(GameChoice),
@@ -517,6 +526,22 @@ impl State {
                *with_saves = on;
             }
          }
+         Message::AskExport => {
+            self.confirm = Some(Confirm::Export {
+               config: true,
+               bundle_all: false,
+            });
+         }
+         Message::ExportConfig(on) => {
+            if let Some(Confirm::Export { config, .. }) = &mut self.confirm {
+               *config = on;
+            }
+         }
+         Message::ExportBundle(on) => {
+            if let Some(Confirm::Export { bundle_all, .. }) = &mut self.confirm {
+               *bundle_all = on;
+            }
+         }
          Message::CloseConfirm => self.confirm = None,
          Message::Confirmed => return self.confirmed(shared),
          Message::Removed(Ok(removed)) => {
@@ -546,6 +571,30 @@ impl State {
             ]);
          }
          Message::Cloned(Err(e)) => return shared.toasts.error(t("instance-clone-failed"), Some(e)),
+         Message::ExportTo(path) => {
+            let Some(Confirm::Export { config, bundle_all }) = self.confirm.take() else {
+               return Task::none();
+            };
+            let id = self.id.clone();
+            return shared.start_op(
+               id.clone(),
+               OpKind::Export,
+               move |lithic, _reporter, _cancel| async move {
+                  let instance = lithic.instance(&id).map_err(|e| e.to_string())?;
+                  let opts = ExportOptions {
+                     include_config: config,
+                     bundle_all,
+                     description: None,
+                  };
+                  lithic
+                     .export_pack(&instance, &path, &opts)
+                     .await
+                     .map(|_| Outcome::Exported(path))
+                     .map_err(|e| e.to_string())
+               },
+            );
+         }
+
          Message::FormName(v) => self.edit(|f| f.name = v),
          Message::FormGame(g) => self.edit(|f| f.game = Some(g)),
          Message::FormAccount(a) => self.edit(|f| f.account = Some(a)),
@@ -682,6 +731,19 @@ impl State {
                |r| AppMessage::Instance(Message::Cloned(r)),
             )
          }
+         Confirm::Export { config, bundle_all } => {
+            self.confirm = Some(Confirm::Export { config, bundle_all });
+            let file = shared
+               .instance(&self.id)
+               .map(|i| lithic_core::fsutil::slugify(&i.name))
+               .filter(|s| !s.is_empty())
+               .unwrap_or_else(|| self.id.clone());
+            Task::future(save_pack(
+               t("instance-export-title"),
+               format!("{file}.lithicpack.zip"),
+            ))
+            .and_then(|p| Task::done(AppMessage::Instance(Message::ExportTo(p))))
+         }
       }
    }
 
@@ -766,6 +828,7 @@ impl State {
       let mut tools = row![
          small(t("instance-open-folder"), Message::Open(Folder::Instance)),
          small(t("instance-clone"), Message::AskClone),
+         small(t("instance-export"), Message::AskExport),
          small(t("instance-delete"), Message::AskDelete),
       ]
       .spacing(2);
@@ -1141,6 +1204,30 @@ impl State {
             ]
             .spacing(8),
             460.0,
+         ),
+         Confirm::Export { config, bundle_all } => widget::dialog(
+            t("instance-export-title"),
+            column![
+               text(t("instance-export-body")).size(13).style(style::muted),
+               checkbox(*config)
+                  .label(t("instance-export-config"))
+                  .on_toggle(Message::ExportConfig),
+               checkbox(*bundle_all)
+                  .label(t("instance-export-bundle"))
+                  .on_toggle(Message::ExportBundle),
+            ]
+            .spacing(12),
+            row![
+               widget::secondary(t("common-cancel"), Some(Message::CloseConfirm)),
+               widget::action(
+                  t("instance-export-save"),
+                  String::new(),
+                  false,
+                  Some(Message::Confirmed)
+               ),
+            ]
+            .spacing(8),
+            500.0,
          ),
       }
    }

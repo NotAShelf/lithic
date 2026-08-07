@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use futures::{SinkExt, StreamExt};
@@ -75,6 +76,8 @@ impl Busy {
 pub enum OpKind {
    Install,
    Update,
+   Import,
+   Export,
    GameInstall,
 }
 
@@ -103,7 +106,9 @@ impl From<&Report> for Summary {
 #[derive(Debug, Clone)]
 pub enum Outcome {
    Mods(Summary),
+   Imported { instance: String, summary: Summary },
    GameInstalled(String),
+   Exported(PathBuf),
 }
 
 /// State every screen can read and change.
@@ -622,12 +627,24 @@ impl App {
 
       match result {
          Ok(Outcome::Mods(summary)) => tasks.push(self.summary_toasts(&summary, &name, kind)),
+         Ok(Outcome::Imported { instance, summary }) => {
+            tasks.push(self.summary_toasts(&summary, &name, kind));
+            tasks.push(Task::done(Message::Navigate(Page::Instance(instance))));
+         }
          Ok(Outcome::GameInstalled(version)) => {
             tasks.push(
                self
                   .shared
                   .toasts
                   .success(t1("game-installed", "version", version)),
+            );
+         }
+         Ok(Outcome::Exported(path)) => {
+            tasks.push(
+               self
+                  .shared
+                  .toasts
+                  .success(t1("pack-exported", "path", path.display().to_string())),
             );
          }
          Err(e) if e == lithic_core::Error::Cancelled.to_string() => {

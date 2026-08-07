@@ -23,6 +23,25 @@ pub async fn pick_folder(title: String) -> Option<PathBuf> {
       .map(|h| h.path().to_path_buf())
 }
 
+pub async fn pick_pack(title: String) -> Option<PathBuf> {
+   rfd::AsyncFileDialog::new()
+      .set_title(title)
+      .add_filter("Lithic pack", &["zip"])
+      .pick_file()
+      .await
+      .map(|h| h.path().to_path_buf())
+}
+
+pub async fn save_pack(title: String, name: String) -> Option<PathBuf> {
+   rfd::AsyncFileDialog::new()
+      .set_title(title)
+      .set_file_name(name)
+      .add_filter("Lithic pack", &["zip"])
+      .save_file()
+      .await
+      .map(|h| h.path().to_path_buf())
+}
+
 /// Opens a folder in the file manager or a link in the browser.
 pub fn open(target: &str) -> Result<(), String> {
    opener::open(target).map_err(|e| e.to_string())
