@@ -2,15 +2,21 @@
 //! registry of builds instances can launch with.
 
 use std::collections::BTreeMap;
+use std::env::consts::{ARCH, OS};
+use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tokio::process::Command;
+use tokio::task::spawn_blocking;
 
 use crate::error::{Error, IoContext, Kind, Result};
 use crate::fsutil::{self, now_ms};
 use crate::http::Download;
+use crate::paths::expand_home;
 use crate::progress::{Cancel, Reporter, Step};
 use crate::{Freshness, Lithic, version};
 
@@ -35,44 +41,47 @@ pub enum Platform {
 }
 
 impl Platform {
-   pub const ALL: [Platform; 6] = [
-      Platform::Linux,
-      Platform::Windows,
-      Platform::MacX64,
-      Platform::MacArm64,
-      Platform::LinuxServer,
-      Platform::WindowsServer,
+   pub const ALL: [Self; 6] = [
+      Self::Linux,
+      Self::Windows,
+      Self::MacX64,
+      Self::MacArm64,
+      Self::LinuxServer,
+      Self::WindowsServer,
    ];
 
-   pub fn key(self) -> &'static str {
+   #[must_use]
+   pub const fn key(self) -> &'static str {
       match self {
-         Platform::Linux => "linux",
-         Platform::Windows => "windows",
-         Platform::MacX64 => "mac-x64",
-         Platform::MacArm64 => "mac-arm64",
-         Platform::LinuxServer => "linuxserver",
-         Platform::WindowsServer => "windowsserver",
+         Self::Linux => "linux",
+         Self::Windows => "windows",
+         Self::MacX64 => "mac-x64",
+         Self::MacArm64 => "mac-arm64",
+         Self::LinuxServer => "linuxserver",
+         Self::WindowsServer => "windowsserver",
       }
    }
 
+   #[must_use]
    pub fn from_key(key: &str) -> Option<Self> {
       Self::ALL.into_iter().find(|p| p.key() == key)
    }
 
    /// The client build for the machine lithic runs on.
+   #[must_use]
    pub fn host_client() -> Option<Self> {
-      match (std::env::consts::OS, std::env::consts::ARCH) {
-         ("linux", _) => Some(Platform::Linux),
-         ("windows", _) => Some(Platform::Windows),
-         ("macos", "aarch64") => Some(Platform::MacArm64),
-         ("macos", _) => Some(Platform::MacX64),
+      match (OS, ARCH) {
+         ("linux", _) => Some(Self::Linux),
+         ("windows", _) => Some(Self::Windows),
+         ("macos", "aarch64") => Some(Self::MacArm64),
+         ("macos", _) => Some(Self::MacX64),
          _ => None,
       }
    }
 }
 
-impl std::fmt::Display for Platform {
-   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for Platform {
+   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
       f.write_str(self.key())
    }
 }
@@ -93,6 +102,7 @@ pub struct Release {
 }
 
 impl Release {
+   #[must_use]
    pub fn is_prerelease(&self) -> bool {
       version::is_prerelease(&self.version)
    }
@@ -106,6 +116,10 @@ pub struct Manifest {
 }
 
 impl Manifest {
+   /// Parses the official game release list.
+   ///
+   /// # Errors
+   /// Returns an error if the response is not a JSON object of releases.
    pub fn parse(json: &str) -> Result<Self> {
       let root: BTreeMap<String, Value> =
          serde_json::from_str(json).map_err(|e| Error::parse("game release list", e))?;
@@ -145,11 +159,13 @@ impl Manifest {
       })
    }
 
+   #[must_use]
    pub fn release(&self, version: &str) -> Option<&Release> {
       let v = version.trim().trim_start_matches(['v', 'V']);
       self.releases.iter().find(|r| r.version.eq_ignore_ascii_case(v))
    }
 
+   #[must_use]
    pub fn latest_stable(&self) -> Option<&Release> {
       self.releases.iter().find(|r| !r.is_prerelease())
    }
@@ -174,6 +190,7 @@ struct Registry {
 
 /// The executable inside a game directory, and any arguments needed before
 /// the game's own. Builds before 1.18 on Linux and macOS run under mono.
+#[must_use]
 pub fn find_executable(dir: &Path) -> Option<(PathBuf, Vec<String>)> {
    if cfg!(windows) {
       let exe = dir.join("Vintagestory.exe");
@@ -190,6 +207,7 @@ pub fn find_executable(dir: &Path) -> Option<(PathBuf, Vec<String>)> {
 
 /// `dir` itself or its only relevant child (`vintagestory/`,
 /// `Vintage Story.app/`) if that is where the executable is.
+#[must_use]
 pub fn locate_game_dir(dir: &Path) -> Option<PathBuf> {
    if find_executable(dir).is_some() {
       return Some(dir.to_path_buf());
@@ -202,6 +220,11 @@ pub fn locate_game_dir(dir: &Path) -> Option<PathBuf> {
 }
 
 impl Lithic {
+   /// Fetches the release list, using a recent cached copy when requested.
+   ///
+   /// # Errors
+   /// Returns an error if the request or parsing fails and no usable cached
+   /// release list exists.
    pub async fn game_manifest(&self, freshness: Freshness) -> Result<Manifest> {
       let path = self.paths.game_manifest_file();
       let cached: Option<Manifest> = fsutil::read_json(&path).ok().flatten();
@@ -227,6 +250,10 @@ impl Lithic {
       }
    }
 
+   /// Lists registered game builds, newest first.
+   ///
+   /// # Errors
+   /// Returns an error if the registry cannot be read or parsed.
    pub fn game_installs(&self) -> Result<Vec<Install>> {
       let registry: Registry = fsutil::read_toml(&self.paths.game_registry_file())?.unwrap_or_default();
       let mut installs = registry.installs;
@@ -234,6 +261,10 @@ impl Lithic {
       Ok(installs)
    }
 
+   /// Finds a registered game build by version.
+   ///
+   /// # Errors
+   /// Returns an error if the registry cannot be read or the version is absent.
    pub fn game_install(&self, version: &str) -> Result<Install> {
       let v = version.trim().trim_start_matches(['v', 'V']);
       self
@@ -245,12 +276,16 @@ impl Lithic {
 
    /// Registers an existing game directory under `version`. Replaces an
    /// earlier registration of the same version.
+   ///
+   /// # Errors
+   /// Returns an error if the version is empty, no executable is found, or
+   /// the registry cannot be updated.
    pub fn add_game_install(&self, version: &str, path: &Path) -> Result<Install> {
       let version = version.trim().trim_start_matches(['v', 'V']).to_string();
       if version.is_empty() {
          return Err(Error::invalid("a game version is required"));
       }
-      let path = crate::paths::expand_home(path);
+      let path = expand_home(path);
       let dir = locate_game_dir(&path)
          .ok_or_else(|| Error::invalid(format!("no Vintage Story executable found in {}", path.display())))?;
       let install = Install {
@@ -264,6 +299,10 @@ impl Lithic {
 
    /// Unregisters a build. Files are deleted only for builds lithic
    /// installed itself. Refuses while an instance uses the version.
+   ///
+   /// # Errors
+   /// Returns an error if the version is absent or in use, registry access
+   /// fails, or managed build files cannot be removed.
    pub fn remove_game_install(&self, version: &str) -> Result<()> {
       let install = self.game_install(version)?;
       let users: Vec<String> = self
@@ -290,20 +329,19 @@ impl Lithic {
       })?;
       if install.managed {
          let root = self.game_root()?;
-         match install
+         if let Some(top) = install
             .path
             .ancestors()
             .find(|p| p.parent() == Some(root.as_path()))
          {
-            Some(top) => fsutil::remove_path(top)?,
-            None => {
-               // Installed by lithic 1.x into `<data>/game-versions/<id>/`.
-               fsutil::remove_path(&install.path)?;
-               if let Some(parent) = install.path.parent()
-                  && fs::read_dir(parent).is_ok_and(|mut d| d.next().is_none())
-               {
-                  let _ = fs::remove_dir(parent);
-               }
+            fsutil::remove_path(top)?;
+         } else {
+            // Installed by lithic 1.x into `<data>/game-versions/<id>/`.
+            fsutil::remove_path(&install.path)?;
+            if let Some(parent) = install.path.parent()
+               && fs::read_dir(parent).is_ok_and(|mut d| d.next().is_none())
+            {
+               let _ = fs::remove_dir(parent);
             }
          }
       }
@@ -311,6 +349,10 @@ impl Lithic {
    }
 
    /// Downloads, verifies and unpacks a client build for this machine.
+   ///
+   /// # Errors
+   /// Returns an error if the platform or build is unavailable, download or
+   /// extraction fails, the operation is cancelled, or registration fails.
    pub async fn install_game(&self, version: &str, reporter: &Reporter, cancel: &Cancel) -> Result<Install> {
       let platform = Platform::host_client()
          .ok_or_else(|| Error::Unsupported("there are no game builds for this operating system".into()))?;
@@ -365,25 +407,22 @@ impl Lithic {
       let _ = fsutil::remove_path(&work);
       let result = async {
          cancel.check()?;
-         match platform {
-            Platform::Windows => {
-               reporter.step(Step::Installing);
-               run_windows_installer(&archive, &work).await?;
-            }
-            _ => {
-               reporter.step(Step::Extracting);
-               let (a, w) = (archive.clone(), work.clone());
-               tokio::task::spawn_blocking(move || extract_tar_gz(&a, &w))
-                  .await
-                  .map_err(|e| Error::invalid(format!("extraction failed: {e}")))??;
-            }
+         if platform == Platform::Windows {
+            reporter.step(Step::Installing);
+            run_windows_installer(&archive, &work).await?;
+         } else {
+            reporter.step(Step::Extracting);
+            let (a, w) = (archive.clone(), work.clone());
+            spawn_blocking(move || extract_tar_gz(&a, &w))
+               .await
+               .map_err(|e| Error::invalid(format!("extraction failed: {e}")))??;
          }
          let game_dir = locate_game_dir(&work).ok_or_else(|| {
             Error::invalid("the downloaded build does not contain a Vintage Story executable")
          })?;
          let relative = game_dir
             .strip_prefix(&work)
-            .unwrap_or(Path::new(""))
+            .unwrap_or_else(|_| Path::new(""))
             .to_path_buf();
          if work != target {
             fs::rename(&work, &target).at(&target)?;
@@ -411,6 +450,10 @@ impl Lithic {
 
    /// Downloads any artifact from the release list into `dir` without
    /// installing it, for example a server build.
+   ///
+   /// # Errors
+   /// Returns an error if the build is unavailable, the download fails its
+   /// checksum, cannot be written, or the operation is cancelled.
    pub async fn download_game(
       &self,
       version: &str,
@@ -449,8 +492,7 @@ impl Lithic {
          .settings()?
          .game
          .install_dir
-         .map(crate::paths::expand_home)
-         .unwrap_or_else(|| self.paths.game_dir()))
+         .map_or_else(|| self.paths.game_dir(), expand_home))
    }
 
    pub(crate) fn register(&self, install: Install) -> Result<()> {
@@ -466,7 +508,7 @@ impl Lithic {
 fn extract_tar_gz(archive: &Path, dest: &Path) -> Result<()> {
    fs::create_dir_all(dest).at(dest)?;
    let file = fs::File::open(archive).at(archive)?;
-   let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(file));
+   let mut tar = tar::Archive::new(GzDecoder::new(file));
    tar.set_preserve_permissions(true);
    tar.set_overwrite(true);
    for entry in tar.entries().at(archive)? {
@@ -482,7 +524,7 @@ async fn run_windows_installer(installer: &Path, dest: &Path) -> Result<()> {
    // The game ships an Inno Setup installer. These switches install without
    // any prompts, shortcuts or file associations into `dest`, leaving any
    // stock installation alone.
-   let status = tokio::process::Command::new(installer)
+   let status = Command::new(installer)
       .arg("/VERYSILENT")
       .arg("/SUPPRESSMSGBOXES")
       .arg("/NORESTART")
@@ -502,8 +544,14 @@ async fn run_windows_installer(installer: &Path, dest: &Path) -> Result<()> {
 }
 
 #[cfg(test)]
+#[expect(
+   clippy::unwrap_used,
+   reason = "test setup and assertions intentionally fail on error"
+)]
 mod tests {
    use super::*;
+   use crate::instance::NewInstance;
+   use flate2::write::GzEncoder;
 
    const MANIFEST: &str = r#"{
       "1.22.7": {
@@ -543,8 +591,7 @@ mod tests {
       let d = tempfile::tempdir().unwrap();
       let archive = d.path().join("vs.tar.gz");
       {
-         let gz =
-            flate2::write::GzEncoder::new(fs::File::create(&archive).unwrap(), flate2::Compression::fast());
+         let gz = GzEncoder::new(fs::File::create(&archive).unwrap(), flate2::Compression::fast());
          let mut b = tar::Builder::new(gz);
          let mut header = tar::Header::new_gnu();
          header.set_size(4);
@@ -581,7 +628,7 @@ mod tests {
       assert!(!added.managed);
       assert!(l.add_game_install("1.21.6", d.path()).is_err());
 
-      l.create_instance(crate::instance::NewInstance {
+      l.create_instance(NewInstance {
          name: "uses it".into(),
          game_version: Some("1.21.5".into()),
          ..Default::default()
