@@ -1,11 +1,18 @@
+use std::path::Path;
+
 use lithic_core::fsutil::file_name_string;
 use lithic_core::launch;
 use serde::Serialize;
 
 use crate::Ctx;
 use crate::args::{LaunchArgs, LogsArgs};
-use crate::ui::{Result, fail, format_duration};
+use crate::ui::{Result, Ui, fail, format_duration};
 
+#[expect(
+   clippy::print_stdout,
+   clippy::print_stderr,
+   reason = "dry-run commands go to stdout and game crash diagnostics go to stderr"
+)]
 pub async fn launch(ctx: &Ctx, args: LaunchArgs) -> Result {
    let instance = ctx.instance(args.id.as_deref())?;
 
@@ -14,12 +21,12 @@ pub async fn launch(ctx: &Ctx, args: LaunchArgs) -> Result {
       if ctx.ui.json {
          #[derive(Serialize)]
          struct Out<'a> {
-            program: &'a std::path::Path,
+            program: &'a Path,
             args: &'a [String],
-            cwd: &'a std::path::Path,
+            cwd: &'a Path,
             env: &'a [(String, String)],
          }
-         return ctx.ui.print_json(&Out {
+         return Ui::print_json(&Out {
             program: &spec.program,
             args: &spec.args,
             cwd: &spec.cwd,
@@ -72,13 +79,14 @@ pub async fn launch(ctx: &Ctx, args: LaunchArgs) -> Result {
    fail("")
 }
 
+#[expect(clippy::print_stdout, reason = "log paths and contents are CLI output")]
 pub fn logs(ctx: &Ctx, args: &LogsArgs) -> Result {
    let instance = ctx.instance(args.id.as_deref())?;
    let files = ctx.lithic.log_files(&instance);
 
    if args.list {
       if ctx.ui.json {
-         return ctx.ui.print_json(&files);
+         return Ui::print_json(&files);
       }
       for f in &files {
          println!("{}", f.display());
