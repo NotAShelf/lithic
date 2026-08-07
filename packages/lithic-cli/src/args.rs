@@ -75,6 +75,12 @@ pub enum Command {
    /// Remove mods (same as `mods remove`)
    Remove(ModsRemoveArgs),
 
+   /// Search the ModDB
+   Search(SearchArgs),
+
+   /// Show a mod's details from the ModDB
+   Info(InfoArgs),
+
    /// Install and manage game versions
    #[command(subcommand, visible_alias = "g")]
    Game(GameCommand),
@@ -277,6 +283,47 @@ pub struct ModsRemoveArgs {
    pub keep_deps: bool,
 }
 
+#[derive(Debug, Args)]
+pub struct SearchArgs {
+   pub query: Vec<String>,
+   #[arg(long, value_enum, default_value_t = SortArg::Relevance)]
+   pub sort: SortArg,
+   #[arg(long, default_value_t = 25)]
+   pub limit: usize,
+   /// Only mods with a release for this game version (the instance's by
+   /// default when one is selected)
+   #[arg(long, value_name = "VERSION", conflicts_with = "any_version")]
+   pub game: Option<String>,
+   /// Do not filter by game version
+   #[arg(long)]
+   pub any_version: bool,
+   /// Fetch a fresh mod list instead of the cached one
+   #[arg(long)]
+   pub refresh: bool,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum SortArg {
+   Relevance,
+   Downloads,
+   Follows,
+   Trending,
+   Updated,
+   Name,
+}
+
+#[derive(Debug, Args)]
+pub struct InfoArgs {
+   #[arg(value_name = "MOD")]
+   pub id: String,
+   /// List every release
+   #[arg(long)]
+   pub releases: bool,
+   /// Show the changelog of the newest releases
+   #[arg(long)]
+   pub changelog: bool,
+}
+
 #[derive(Debug, Subcommand)]
 pub enum GameCommand {
    /// Installed game versions
@@ -360,7 +407,7 @@ pub enum SettingsCommand {
    Unset { key: String },
    /// Where lithic keeps its files
    Paths,
-   /// Colours of the `list` table
+   /// Colours of the `list` and `search` tables
    #[command(subcommand)]
    Table(TableCommand),
 }
@@ -391,12 +438,14 @@ pub enum TableCommand {
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum TableName {
    List,
+   Search,
 }
 
 impl TableName {
    pub fn key(self) -> &'static str {
       match self {
          TableName::List => "list",
+         TableName::Search => "search",
       }
    }
 }

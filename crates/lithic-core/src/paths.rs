@@ -71,6 +71,10 @@ impl Paths {
       self.cache.join("downloads")
    }
 
+   pub fn mod_index_file(&self) -> PathBuf {
+      self.cache.join("mod-index.json")
+   }
+
    pub fn game_manifest_file(&self) -> PathBuf {
       self.cache.join("game-manifest.json")
    }

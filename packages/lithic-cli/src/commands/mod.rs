@@ -1,3 +1,4 @@
+mod browse;
 mod game;
 mod instance;
 mod launch;
@@ -18,6 +19,8 @@ pub async fn run(ctx: &Ctx, command: Command) -> Result {
       Command::Install(args) => mods::run(ctx, ModsCommand::Install(args)).await,
       Command::Update(args) => mods::run(ctx, ModsCommand::Update(args)).await,
       Command::Remove(args) => mods::run(ctx, ModsCommand::Remove(args)).await,
+      Command::Search(args) => browse::search(ctx, args).await,
+      Command::Info(args) => browse::info(ctx, args).await,
       Command::Game(cmd) => game::run(ctx, cmd).await,
       Command::Launch(args) => launch::launch(ctx, args).await,
       Command::Logs(args) => launch::logs(ctx, &args),

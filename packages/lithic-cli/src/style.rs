@@ -6,8 +6,10 @@
 //! [cli.table.list.headers]
 //! "name.color" = "green"
 //! "name.attribute" = "bold"
+//!
+//! [cli.table.search.cells]
+//! "mod_id.color" = "magenta"
 //! ```
-
 
 use clap::ValueEnum;
 use comfy_table::{Attribute, Cell, Color};
@@ -194,6 +196,7 @@ fn default_look(table: &str, part: &str, column: &str) -> Look {
       ("list", "version") => (None, Some(CellAttr::Dim)),
       ("list", "update") => (Some(CellColor::Green), Some(CellAttr::Bold)),
       ("list", "problems") => (Some(CellColor::Red), Some(CellAttr::Bold)),
+      ("search", "mod_id") => (Some(CellColor::Magenta), Some(CellAttr::Bold)),
       _ => (None, None),
    };
    Look { color, attr }

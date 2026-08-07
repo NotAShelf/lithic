@@ -58,13 +58,15 @@ impl fmt::Display for ThemeMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StartPage {
    Instances,
+   Browse,
    Games,
    Settings,
 }
 
 impl StartPage {
-   const ALL: [StartPage; 3] = [
+   const ALL: [StartPage; 4] = [
       StartPage::Instances,
+      StartPage::Browse,
       StartPage::Games,
       StartPage::Settings,
    ];
@@ -72,6 +74,7 @@ impl StartPage {
    fn key(self) -> &'static str {
       match self {
          StartPage::Instances => "instances",
+         StartPage::Browse => "browse",
          StartPage::Games => "games",
          StartPage::Settings => "settings",
       }
@@ -79,6 +82,7 @@ impl StartPage {
 
    fn from_key(key: &str) -> Self {
       match Page::from_setting(key) {
+         Page::Browse => StartPage::Browse,
          Page::Games => StartPage::Games,
          Page::Settings => StartPage::Settings,
          _ => StartPage::Instances,
@@ -90,6 +94,7 @@ impl fmt::Display for StartPage {
    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
       f.write_str(&match self {
          StartPage::Instances => t("nav-instances"),
+         StartPage::Browse => t("nav-browse"),
          StartPage::Games => t("nav-games"),
          StartPage::Settings => t("nav-settings"),
       })

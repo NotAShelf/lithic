@@ -220,6 +220,10 @@ fn table(ctx: &Ctx, cmd: TableCommand) -> Result {
                "list",
                ["name", "mod_id", "version", "state", "update", "filename"].as_slice(),
             ),
+            (
+               "search",
+               ["mod_id", "name", "author", "downloads", "summary"].as_slice(),
+            ),
          ];
          let mut out = ctx.ui.table();
          out.set_header(vec!["Table", "Column", "Header", "Cells"]);

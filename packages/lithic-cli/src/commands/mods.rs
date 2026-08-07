@@ -63,7 +63,7 @@ fn list(ctx: &Ctx, args: &ModsListArgs) -> Result {
    }
    if installed.is_empty() {
       ctx.ui.status(format!(
-         "{} has no mods. Install some with `lithic mods install <id>`.",
+         "{} has no mods. Find some with `lithic search <words>`.",
          instance.name
       ));
       return Ok(());

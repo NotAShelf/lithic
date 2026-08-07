@@ -138,7 +138,6 @@ pub struct State {
    mods: Option<Result<Vec<InstalledMod>, String>>,
    problems: Vec<Problem>,
    filter: String,
-   install_input: String,
    updates: Option<Vec<Update>>,
    checking: bool,
    confirm: Option<Confirm>,
@@ -152,8 +151,6 @@ pub enum Message {
    Tab(Tab),
    ModsLoaded(Result<Vec<InstalledMod>, String>),
    Filter(String),
-   InstallInput(String),
-   InstallRequested,
    Toggle(String, bool),
    Changed(Result<(), String>),
    CheckUpdates,
@@ -163,6 +160,7 @@ pub enum Message {
    Install(String),
    AskRemove(String),
    Pin(String, Option<String>),
+   AddMods,
    Launch,
    Stop,
    Select,
@@ -221,7 +219,6 @@ impl State {
          mods: None,
          problems: Vec::new(),
          filter: String::new(),
-         install_input: String::new(),
          updates: None,
          checking: false,
          confirm: None,
@@ -428,15 +425,7 @@ impl State {
          Message::Pin(mod_id, version) => {
             return self.blocking_change(shared, move |l, i| l.set_mod_pin(i, &mod_id, version.as_deref()));
          }
-         Message::InstallInput(value) => self.install_input = value,
-         Message::InstallRequested => {
-            let reference = match ModRef::parse(self.install_input.trim()) {
-               Ok(reference) => reference,
-               Err(error) => return shared.toasts.error(t("instance-change-failed"), Some(error.to_string())),
-            };
-            self.install_input.clear();
-            return self.start_install(shared, vec![reference], OpKind::Install);
-         }
+         Message::AddMods => return Task::done(AppMessage::BrowseFor(self.id.clone())),
          Message::Launch => return Task::done(AppMessage::Launch(self.id.clone())),
          Message::Stop => return Task::done(AppMessage::Stop(self.id.clone())),
          Message::Cancel => return Task::done(AppMessage::CancelOp(self.id.clone())),
@@ -794,18 +783,7 @@ impl State {
          button(text(t("instance-open-mods")).size(13))
             .style(button::text)
             .on_press(Message::Open(Folder::Mods)),
-         text(t("instance-add-mods")).size(13),
-         text_input("mod-id", &self.install_input)
-            .on_input(Message::InstallInput)
-            .on_submit(Message::InstallRequested)
-            .padding(8)
-            .width(160),
-         button(text(t("browse-install")).size(13))
-            .style(button::secondary)
-            .on_press_maybe(
-               (busy.is_none() && !self.install_input.trim().is_empty())
-                  .then_some(Message::InstallRequested),
-            ),
+         widget::secondary(t("instance-add-mods"), Some(Message::AddMods)),
       ]
       .spacing(8)
       .align_y(Center);
@@ -877,7 +855,7 @@ impl State {
          Some(Ok(installed)) if installed.is_empty() => widget::empty(
             t("instance-no-mods-title"),
             t("instance-no-mods-body"),
-            None,
+            Some(widget::secondary(t("instance-add-mods"), Some(Message::AddMods))),
          ),
          Some(Ok(installed)) => {
             let needle = self.filter.trim().to_lowercase();
