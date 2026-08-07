@@ -1,551 +1,549 @@
-use crate::api::client::{ApiClient, VSExecutabletype, VSMirrorType, VSOSType, VSWinInstallerType};
-use crate::config::manager::{Config, get_config};
-use crate::errors::LithicError;
-use crate::traits::string_ext::StrLowerExt;
-use crate::utils::sorted_game_versions;
-use serde::{Deserialize, Serialize};
+//! Instances: a game version, a data directory the game runs against, and the
+//! mods inside it.
+//!
+//! Layout of `<data>/instances/<id>/`:
+//!
+//! ```text
+//! instance.toml     settings, see [`Instance`]
+//! data/             passed to the game as --dataPath (unless data_dir is set)
+//! data/Mods/        mods the game loads
+//! disabled-mods/    mods switched off in lithic
+//! mods.json         what lithic installed, pins; see crate::mods::lock
+//! logs/             output of each launch
+//! ```
+
+use std::collections::BTreeMap;
+use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::fs::File;
-use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum GameVersionSource {
-   #[default]
-   Manual,
-   LithicDownload,
-}
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct GameVersionInstall {
+use crate::Lithic;
+use crate::error::{Error, IoContext, Kind, Result};
+use crate::fsutil::{self, now_ms};
+
+pub const INSTANCE_FILE: &str = "instance.toml";
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Instance {
+   /// Directory name under `instances/`. Not stored in the file.
+   #[serde(skip)]
    pub id: String,
-   pub version: String,
-   pub path: PathBuf,
-   #[serde(default)]
-   pub source: GameVersionSource,
-   /// The OS this install targets. `None` keeps the field optional on disk so
-   /// older configs (where `os` was missing) keep loading.
-   #[serde(default)]
-   pub os: Option<VSOSType>,
-}
+   /// The instance directory. Not stored in the file.
+   #[serde(skip)]
+   pub dir: PathBuf,
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct InstanceConfig {
-   pub id: String,
    pub name: String,
-   pub data_dir: PathBuf,
-   pub mods_dir: PathBuf,
-   pub game_version_id: String,
+   /// Game version this instance plays, such as `1.21.5`. Mods are chosen to
+   /// match it and it selects the game build used for launching.
+   #[serde(default, skip_serializing_if = "Option::is_none")]
+   pub game_version: Option<String>,
+   /// A data directory outside the instance, for example the stock launcher's
+   /// `VintagestoryData`. Lithic never deletes it.
+   #[serde(default, skip_serializing_if = "Option::is_none")]
+   pub data_dir: Option<PathBuf>,
+   /// An extra mod folder outside the data directory, passed to the game with
+   /// `--addModPath`. When set, lithic manages mods there instead of in
+   /// `<data>/Mods`.
+   #[serde(default, skip_serializing_if = "Option::is_none")]
+   pub mods_dir: Option<PathBuf>,
+   /// Account uid to launch with. Falls back to the active account.
+   #[serde(default, skip_serializing_if = "Option::is_none")]
+   pub account: Option<String>,
    #[serde(default)]
-   pub enabled_modpacks: Vec<String>,
+   pub launch: LaunchOptions,
    #[serde(default)]
-   pub start_params: String,
-   #[serde(default)]
-   pub env_vars: String,
-   #[serde(default)]
-   pub last_played_at: i64,
-   #[serde(default)]
-   pub total_play_time_ms: i64,
+   pub stats: Stats,
 }
 
-#[derive(Debug, Clone)]
-pub struct GameVersionInstallOptions {
-   pub id: String,
-   pub version: String,
-   pub install_dir: Option<PathBuf>,
-   pub os_type: VSOSType,
-   pub exe_type: VSExecutabletype,
-   pub windows_installer_type: Option<VSWinInstallerType>,
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LaunchOptions {
+   /// Extra arguments for the game, one per entry.
+   pub args: Vec<String>,
+   pub env: BTreeMap<String, String>,
+   /// Program the game is started through, such as `gamemoderun` or
+   /// `prime-run`, with its own arguments.
+   pub wrapper: Vec<String>,
 }
 
-#[derive(Debug, Clone)]
-pub enum GameVersionInstallEvent {
-   Log(String),
-   Progress {
-      stage: String,
-      downloaded: u64,
-      total: Option<u64>,
-   },
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Stats {
+   pub created_at: i64,
+   pub last_played_at: Option<i64>,
+   pub play_time_ms: i64,
 }
 
-fn now_ms() -> i64 {
-   // u128 -> i64: saturate on overflow instead of silently truncating. Current
-   // timestamps comfortably fit; this is defensive against clock skew far in
-   // the future and against systems whose clock is set before UNIX_EPOCH.
-   SystemTime::now()
-      .duration_since(UNIX_EPOCH)
-      .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
-      .unwrap_or(0)
-}
-
-pub fn find_executable(version_path: &Path) -> Option<(String, Vec<String>)> {
-   #[cfg(target_os = "linux")]
-   {
-      let native = version_path.join("Vintagestory");
-      if native.exists() {
-         return Some((native.to_string_lossy().to_string(), Vec::new()));
-      }
-      let exe = version_path.join("Vintagestory.exe");
-      if exe.exists() {
-         return Some(("mono".to_string(), vec![exe.to_string_lossy().to_string()]));
-      }
+impl Instance {
+   pub fn data_dir(&self) -> PathBuf {
+      self.data_dir.clone().unwrap_or_else(|| self.dir.join("data"))
    }
-   #[cfg(target_os = "windows")]
-   {
-      let exe = version_path.join("Vintagestory.exe");
-      if exe.exists() {
-         return Some((exe.to_string_lossy().to_string(), Vec::new()));
-      }
+
+   /// Where the game looks for this instance's mods and where lithic installs
+   /// them.
+   pub fn mods_dir(&self) -> PathBuf {
+      self
+         .mods_dir
+         .clone()
+         .unwrap_or_else(|| self.data_dir().join("Mods"))
    }
-   #[cfg(target_os = "macos")]
-   {
-      let native = version_path.join("Vintagestory");
-      if native.exists() {
-         return Some((native.to_string_lossy().to_string(), Vec::new()));
-      }
+
+   pub fn disabled_mods_dir(&self) -> PathBuf {
+      self.dir.join("disabled-mods")
    }
-   None
+
+   pub fn lock_file(&self) -> PathBuf {
+      self.dir.join("mods.json")
+   }
+
+   pub fn logs_dir(&self) -> PathBuf {
+      self.dir.join("logs")
+   }
+
+   /// Log directory the game itself writes to.
+   pub fn game_logs_dir(&self) -> PathBuf {
+      self.data_dir().join("Logs")
+   }
+
+   pub fn has_external_data(&self) -> bool {
+      self.data_dir.is_some()
+   }
+
+   fn file(&self) -> PathBuf {
+      self.dir.join(INSTANCE_FILE)
+   }
 }
 
-fn find_executable_dir(path: &Path) -> Option<PathBuf> {
-   if find_executable(path).is_some() {
-      return Some(path.to_path_buf());
-   }
-   let entries = std::fs::read_dir(path).ok()?;
-   for entry in entries.flatten() {
-      let child = entry.path();
-      if child.is_dir() && find_executable(&child).is_some() {
-         return Some(child);
-      }
-   }
-   None
+#[derive(Debug, Clone, Default)]
+pub struct NewInstance {
+   pub name: String,
+   /// Derived from the name when not given.
+   pub id: Option<String>,
+   pub game_version: Option<String>,
+   pub data_dir: Option<PathBuf>,
+   pub mods_dir: Option<PathBuf>,
 }
 
-fn parse_env_vars(raw: &str) -> Vec<(String, String)> {
-   raw.split(',')
-      .filter_map(|entry| {
-         let (k, v) = entry.split_once('=')?;
-         let key = k.trim().to_string();
-         let value = v.trim().to_string();
-         if key.is_empty() || value.is_empty() {
-            return None;
+/// Result of scanning the instances directory. Instances whose file cannot be
+/// read are reported instead of hidden.
+#[derive(Debug, Default)]
+pub struct Listing {
+   pub instances: Vec<Instance>,
+   pub broken: Vec<(String, Error)>,
+}
+
+impl Lithic {
+   pub fn list_instances(&self) -> Result<Listing> {
+      let root = self.paths.instances_dir();
+      let mut listing = Listing::default();
+      let entries = match fs::read_dir(&root) {
+         Ok(entries) => entries,
+         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(listing),
+         Err(e) => return Err(Error::io(&root, e)),
+      };
+      for entry in entries {
+         let entry = entry.at(&root)?;
+         let dir = entry.path();
+         if !dir.join(INSTANCE_FILE).is_file() {
+            continue;
          }
-         Some((key, value))
+         let id = entry.file_name().to_string_lossy().into_owned();
+         match load(&id, &dir) {
+            Ok(instance) => listing.instances.push(instance),
+            Err(e) => listing.broken.push((id, e)),
+         }
+      }
+      listing.instances.sort_by(|a, b| {
+         b.stats
+            .last_played_at
+            .cmp(&a.stats.last_played_at)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+      });
+      Ok(listing)
+   }
+
+   pub fn instance(&self, id: &str) -> Result<Instance> {
+      let dir = self.paths.instance_dir(id);
+      if !valid_id(id) || !dir.join(INSTANCE_FILE).is_file() {
+         return Err(Error::not_found(Kind::Instance, id));
+      }
+      load(id, &dir)
+   }
+
+   /// The instance named by `id`, or the active one when `id` is `None`.
+   pub fn resolve_instance(&self, id: Option<&str>) -> Result<Instance> {
+      if let Some(id) = id {
+         return self.instance(id);
+      }
+      match self.settings()?.active_instance {
+         Some(active) => self.instance(&active),
+         None => Err(Error::invalid(
+            "no instance selected; pass one explicitly or select one first",
+         )),
+      }
+   }
+
+   pub fn active_instance(&self) -> Result<Option<Instance>> {
+      let Some(id) = self.settings()?.active_instance else {
+         return Ok(None);
+      };
+      match self.instance(&id) {
+         Ok(instance) => Ok(Some(instance)),
+         Err(Error::NotFound { .. }) => Ok(None),
+         Err(e) => Err(e),
+      }
+   }
+
+   pub fn set_active_instance(&self, id: Option<&str>) -> Result<()> {
+      if let Some(id) = id {
+         self.instance(id)?;
+      }
+      self.update_settings(|s| s.active_instance = id.map(ToString::to_string))
+   }
+
+   pub fn create_instance(&self, new: NewInstance) -> Result<Instance> {
+      let name = new.name.trim().to_string();
+      if name.is_empty() {
+         return Err(Error::invalid("an instance needs a name"));
+      }
+      let root = self.paths.instances_dir();
+      fs::create_dir_all(&root).at(&root)?;
+
+      let id = match new.id {
+         Some(id) => {
+            if !valid_id(&id) {
+               return Err(Error::invalid(format!(
+                  "`{id}` is not a valid instance id; use lowercase letters, digits and dashes"
+               )));
+            }
+            if root.join(&id).exists() {
+               return Err(Error::AlreadyExists {
+                  kind: Kind::Instance,
+                  id,
+               });
+            }
+            id
+         }
+         None => {
+            let base = match fsutil::slugify(&name) {
+               s if s.is_empty() => "instance".to_string(),
+               s => s,
+            };
+            fsutil::unique_name(&base, |c| root.join(c).exists())
+         }
+      };
+
+      let data_dir = new.data_dir.map(crate::paths::expand_home);
+      let mods_dir = new.mods_dir.map(crate::paths::expand_home);
+      if let Some(dir) = &data_dir {
+         self.ensure_data_dir_unshared(dir, None)?;
+      }
+
+      let dir = root.join(&id);
+      let instance = Instance {
+         id: id.clone(),
+         dir: dir.clone(),
+         name,
+         game_version: new.game_version.filter(|v| !v.trim().is_empty()),
+         data_dir,
+         mods_dir,
+         account: None,
+         launch: LaunchOptions::default(),
+         stats: Stats {
+            created_at: now_ms(),
+            ..Stats::default()
+         },
+      };
+
+      fs::create_dir_all(&dir).at(&dir)?;
+      let result = (|| {
+         let mods = instance.mods_dir();
+         fs::create_dir_all(&mods).at(&mods)?;
+         fsutil::write_toml(&instance.file(), &instance)
+      })();
+      if let Err(e) = result {
+         let _ = fsutil::remove_path(&dir);
+         return Err(e);
+      }
+      Ok(instance)
+   }
+
+   /// Applies `f` to the instance as it is on disk right now.
+   pub fn update_instance<R>(&self, id: &str, f: impl FnOnce(&mut Instance) -> Result<R>) -> Result<R> {
+      let current = self.instance(id)?;
+      let _lock = fsutil::FileLock::acquire(&current.file())?;
+      let mut instance = load(id, &current.dir)?;
+      let before = instance.clone();
+      let out = f(&mut instance)?;
+
+      instance.name = instance.name.trim().to_string();
+      if instance.name.is_empty() {
+         return Err(Error::invalid("an instance needs a name"));
+      }
+      instance.game_version = instance.game_version.take().filter(|v| !v.trim().is_empty());
+      if instance.data_dir != before.data_dir
+         && let Some(dir) = &instance.data_dir
+      {
+         self.ensure_data_dir_unshared(dir, Some(id))?;
+      }
+      instance.id = before.id;
+      instance.dir = before.dir;
+      fsutil::write_toml(&instance.file(), &instance)?;
+      Ok(out)
+   }
+
+   /// Copies an instance: its settings and everything in its data directory
+   /// except logs and caches. Saves are copied only when `with_saves` is set.
+   /// The copy always gets its own data directory.
+   pub fn clone_instance(&self, id: &str, name: &str, with_saves: bool) -> Result<Instance> {
+      let source = self.instance(id)?;
+      let mut copy = self.create_instance(NewInstance {
+         name: name.to_string(),
+         game_version: source.game_version.clone(),
+         ..NewInstance::default()
+      })?;
+
+      let result = (|| {
+         let skip = |rel: &Path| {
+            let first = rel
+               .components()
+               .next()
+               .map(|c| c.as_os_str().to_string_lossy().into_owned());
+            match first.as_deref() {
+               Some("Logs" | "Cache" | "Backups" | "Mods") => true,
+               Some("Saves") => !with_saves,
+               _ => false,
+            }
+         };
+         let from = source.data_dir();
+         if from.is_dir() {
+            fsutil::copy_dir(&from, &copy.data_dir(), &skip)?;
+         }
+         let mods = source.mods_dir();
+         if mods.is_dir() {
+            fsutil::copy_dir(&mods, &copy.mods_dir(), &|_| false)?;
+         }
+         let disabled = source.disabled_mods_dir();
+         if disabled.is_dir() {
+            fsutil::copy_dir(&disabled, &copy.disabled_mods_dir(), &|_| false)?;
+         }
+         if source.lock_file().is_file() {
+            fs::copy(source.lock_file(), copy.lock_file()).at(source.lock_file())?;
+         }
+         self.update_instance(&copy.id, |c| {
+            c.account = source.account.clone();
+            c.launch = source.launch.clone();
+            Ok(())
+         })
+      })();
+      if let Err(e) = result {
+         let _ = fsutil::remove_path(&copy.dir);
+         return Err(e);
+      }
+      copy = self.instance(&copy.id)?;
+      Ok(copy)
+   }
+
+   /// Deletes an instance directory. A `data_dir` or `mods_dir` outside the
+   /// instance is left alone.
+   pub fn delete_instance(&self, id: &str) -> Result<()> {
+      let instance = self.instance(id)?;
+      fsutil::remove_path(&instance.dir)?;
+      self.update_settings(|s| {
+         if s.active_instance.as_deref() == Some(id) {
+            s.active_instance = None;
+         }
       })
-      .collect()
-}
-
-pub async fn ensure_instances_migrated() -> Result<(), String> {
-   let mut config = get_config().write().await;
-   if !config.instances.is_empty() {
-      return Ok(());
    }
 
-   let default = InstanceConfig {
-      id: "default".to_string(),
-      name: "Default".to_string(),
-      data_dir: PathBuf::new(),
-      mods_dir: config.mod_dir.clone(),
-      game_version_id: String::new(),
-      enabled_modpacks: config.modpacks.enabled.clone(),
-      start_params: String::new(),
-      env_vars: String::new(),
-      last_played_at: 0,
-      total_play_time_ms: 0,
-   };
-   config.instances.push(default);
-   config.active_instance_id = Some("default".to_string());
-   config.save(None).map_err(|e| e.to_string())
-}
-
-pub async fn list_instances() -> Result<Vec<InstanceConfig>, String> {
-   ensure_instances_migrated().await?;
-   let config = get_config().read().await;
-   Ok(config.instances.clone())
-}
-
-pub async fn add_or_update_instance(instance: InstanceConfig) -> Result<(), String> {
-   ensure_instances_migrated().await?;
-   let mut config = get_config().write().await;
-   if instance.id.trim().is_empty() {
-      return Err("Instance id cannot be empty".to_string());
+   /// Adds `elapsed_ms` of play time and stamps the last-played time.
+   pub fn record_play_session(&self, id: &str, started_ms: i64, ended_ms: i64) -> Result<()> {
+      self.update_instance(id, |i| {
+         i.stats.last_played_at = Some(ended_ms.max(started_ms));
+         i.stats.play_time_ms += (ended_ms - started_ms).max(0);
+         Ok(())
+      })
    }
-   if instance.mods_dir.as_os_str().is_empty() {
-      return Err("Instance mods dir cannot be empty".to_string());
-   }
-   if instance.name.trim().is_empty() {
-      return Err("Instance name cannot be empty".to_string());
-   }
-   if let Some(i) = config.instances.iter().position(|x| x.id == instance.id) {
-      let existing = &config.instances[i];
-      let mut updated = instance;
-      // Preserve play history metadata across normal edits.
-      updated.last_played_at = existing.last_played_at;
-      updated.total_play_time_ms = existing.total_play_time_ms;
-      config.instances[i] = updated;
-   } else {
-      config.instances.push(instance);
-   }
-   config.save(None).map_err(|e| e.to_string())
-}
 
-pub async fn remove_instance(id: &str) -> Result<(), String> {
-   ensure_instances_migrated().await?;
-   let mut config = get_config().write().await;
-   config.instances.retain(|x| x.id != id);
-   if config.active_instance_id.as_deref() == Some(id) {
-      config.active_instance_id = config.instances.first().map(|x| x.id.clone());
-   }
-   config.save(None).map_err(|e| e.to_string())
-}
-
-pub async fn set_active_instance(id: &str) -> Result<(), String> {
-   ensure_instances_migrated().await?;
-   let mut config = get_config().write().await;
-   if !config.instances.iter().any(|x| x.id == id) {
-      return Err(format!("Instance not found: {id}"));
-   }
-   config.active_instance_id = Some(id.to_string());
-   if let Some(active) = config.instances.iter().find(|x| x.id == id).cloned() {
-      config.mod_dir = active.mods_dir.clone();
-      config.modpacks.enabled = active.enabled_modpacks;
-   }
-   config.save(None).map_err(|e| e.to_string())
-}
-
-pub async fn get_active_instance() -> Result<Option<InstanceConfig>, String> {
-   ensure_instances_migrated().await?;
-   let config = get_config().read().await;
-   let Some(active_id) = config.active_instance_id.as_ref() else {
-      return Ok(None);
-   };
-   Ok(config.instances.iter().find(|x| &x.id == active_id).cloned())
-}
-
-pub async fn resolve_active_mod_dir() -> Result<PathBuf, String> {
-   if let Some(instance) = get_active_instance().await? {
-      return Ok(instance.mods_dir);
-   }
-   let config = get_config().read().await;
-   Ok(config.mod_dir.clone())
-}
-
-pub async fn list_game_versions() -> Result<Vec<GameVersionInstall>, String> {
-   let config = get_config().read().await;
-   Ok(config.game_versions.clone())
-}
-
-pub async fn add_or_update_game_version(game_version: GameVersionInstall) -> Result<(), String> {
-   let mut config = get_config().write().await;
-   if game_version.id.trim().is_empty()
-      || game_version.version.trim().is_empty()
-      || game_version.path.as_os_str().is_empty()
-   {
-      return Err("Game version id, version, and path are required".to_string());
-   }
-   if let Some(i) = config.game_versions.iter().position(|x| x.id == game_version.id) {
-      config.game_versions[i] = game_version;
-   } else {
-      config.game_versions.push(game_version);
-   }
-   config.save(None).map_err(|e| e.to_string())
-}
-
-pub async fn remove_game_version(id: &str) -> Result<(), String> {
-   let mut config = get_config().write().await;
-   if config.instances.iter().any(|x| x.game_version_id == id) {
-      return Err("Game version is still referenced by an instance".to_string());
-   }
-   config.game_versions.retain(|x| x.id != id);
-   config.save(None).map_err(|e| e.to_string())
-}
-
-async fn download_file<F>(
-   client: &ApiClient,
-   url: &str,
-   save_loc: impl AsRef<Path>,
-   progress: &mut F,
-) -> Result<(), LithicError>
-where
-   F: FnMut(GameVersionInstallEvent),
-{
-   progress(GameVersionInstallEvent::Log(format!("GET {url}")));
-   let response = client.head(url).await?;
-   let total_size = response
-      .headers()
-      .get(reqwest::header::CONTENT_LENGTH)
-      .and_then(|ct_len| ct_len.to_str().ok())
-      .and_then(|ct_len| ct_len.parse::<u64>().ok());
-
-   let mut res = client.get_download(url).await?;
-   let mut file = File::create(save_loc).await?;
-   let mut downloaded = 0;
-   while let Some(chunk) = res
-      .chunk()
-      .await
-      .map_err(|e| LithicError::SimpleError(e.to_string()))?
-   {
-      file.write_all(&chunk).await?;
-      downloaded += chunk.len() as u64;
-      progress(GameVersionInstallEvent::Progress {
-         stage: "Downloading".to_string(),
-         downloaded,
-         total: total_size,
-      });
-   }
-   Ok(())
-}
-
-fn unpack_tar_gz(archive: &Path, destination: &Path) -> Result<(), String> {
-   std::fs::create_dir_all(destination).map_err(|e| e.to_string())?;
-   let status = Command::new("tar")
-      .arg("-xzf")
-      .arg(archive)
-      .arg("-C")
-      .arg(destination)
-      .status()
-      .map_err(|e| format!("Failed to run tar: {e}"))?;
-   if status.success() {
+   fn ensure_data_dir_unshared(&self, dir: &Path, except: Option<&str>) -> Result<()> {
+      let wanted = normalize(dir);
+      for other in self.list_instances()?.instances {
+         if Some(other.id.as_str()) == except {
+            continue;
+         }
+         if normalize(&other.data_dir()) == wanted {
+            return Err(Error::InUse {
+               what: dir.display().to_string(),
+               users: vec![other.name],
+            });
+         }
+      }
       Ok(())
-   } else {
-      Err(format!("tar exited with status: {status}"))
    }
 }
 
-pub async fn install_game_version_with_progress<F>(
-   opts: GameVersionInstallOptions,
-   mut progress: F,
-) -> Result<GameVersionInstall, String>
-where
-   F: FnMut(GameVersionInstallEvent),
-{
-   let version = opts.version.trim_start_matches('v').to_string();
-   progress(GameVersionInstallEvent::Log(format!(
-      "Validating Vintage Story version {version}"
-   )));
-   let game_versions = sorted_game_versions().await.map_err(|e| e.to_string())?;
-   let found = game_versions
-      .iter()
-      .any(|v| v.replace('v', "").eq_ignore_ascii_case(&version));
-   if !found {
-      return Err(format!("Invalid Vintage Story version: {version}"));
+fn load(id: &str, dir: &Path) -> Result<Instance> {
+   let file = dir.join(INSTANCE_FILE);
+   let mut instance: Instance =
+      fsutil::read_toml(&file)?.ok_or_else(|| Error::not_found(Kind::Instance, id))?;
+   instance.id = id.to_string();
+   instance.dir = dir.to_path_buf();
+   Ok(instance)
+}
+
+pub fn valid_id(id: &str) -> bool {
+   !id.is_empty()
+      && id.len() <= 64
+      && id
+         .chars()
+         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_' || c == '.')
+      && !id.starts_with('.')
+}
+
+fn normalize(path: &Path) -> PathBuf {
+   fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+#[cfg(test)]
+mod tests {
+   use super::*;
+   use crate::Paths;
+
+   fn lithic() -> (tempfile::TempDir, Lithic) {
+      let dir = tempfile::tempdir().unwrap();
+      let lithic = Lithic::new(Paths::rooted(dir.path())).unwrap();
+      (dir, lithic)
    }
 
-   let mirror = if version.lower_contains("-rc") {
-      VSMirrorType::Unstable
-   } else {
-      VSMirrorType::Stable
-   };
-   let client = ApiClient::new();
-   let (url, filename) = client
-      .download_uri(
-         &opts.os_type,
-         &opts.exe_type,
-         &mirror,
-         &version,
-         opts.windows_installer_type.as_ref(),
-      )
-      .map_err(|e| e.to_string())?;
-   progress(GameVersionInstallEvent::Log(format!(
-      "Resolved download URL: {url}"
-   )));
+   #[test]
+   fn create_derives_unique_ids() {
+      let (_d, l) = lithic();
+      let a = l
+         .create_instance(NewInstance {
+            name: "My Pack".into(),
+            ..Default::default()
+         })
+         .unwrap();
+      let b = l
+         .create_instance(NewInstance {
+            name: "My Pack".into(),
+            ..Default::default()
+         })
+         .unwrap();
+      assert_eq!(a.id, "my-pack");
+      assert_eq!(b.id, "my-pack-2");
+      assert!(a.mods_dir().is_dir());
+      assert_eq!(l.list_instances().unwrap().instances.len(), 2);
+   }
 
-   let root = opts
-      .install_dir
-      .unwrap_or_else(|| Config::data_path().join("game-versions"));
-   tokio::fs::create_dir_all(&root)
-      .await
-      .map_err(|e| e.to_string())?;
-
-   let version_id = if opts.id.trim().is_empty() {
-      version.clone()
-   } else {
-      opts.id
-   };
-   let archive_path = root.join(&filename);
-   progress(GameVersionInstallEvent::Log(format!(
-      "Saving artifact to {}",
-      archive_path.display()
-   )));
-   download_file(&client, url.as_ref(), &archive_path, &mut progress)
-      .await
-      .map_err(|e| e.to_string())?;
-   progress(GameVersionInstallEvent::Log("Download complete".to_string()));
-
-   let registered_path = if archive_path
-      .file_name()
-      .and_then(|n| n.to_str())
-      .is_some_and(|n| n.ends_with(".tar.gz"))
-   {
-      let destination = root.join(&version_id);
-      progress(GameVersionInstallEvent::Log(format!(
-         "Extracting archive to {}",
-         destination.display()
-      )));
-      progress(GameVersionInstallEvent::Progress {
-         stage: "Extracting".to_string(),
-         downloaded: 0,
-         total: None,
-      });
-      let archive = archive_path.clone();
-      let dest = destination.clone();
-      tokio::task::spawn_blocking(move || unpack_tar_gz(&archive, &dest))
-         .await
-         .map_err(|e| e.to_string())??;
-      progress(GameVersionInstallEvent::Progress {
-         stage: "Extracting".to_string(),
-         downloaded: 1,
-         total: Some(1),
-      });
-      find_executable_dir(&destination).unwrap_or(destination)
-   } else {
-      progress(GameVersionInstallEvent::Log(
-         "Downloaded artifact is not a launchable unpacked game directory.".to_string(),
+   #[test]
+   fn explicit_id_collision_is_an_error() {
+      let (_d, l) = lithic();
+      let new = || NewInstance {
+         name: "x".into(),
+         id: Some("x".into()),
+         ..Default::default()
+      };
+      l.create_instance(new()).unwrap();
+      assert!(matches!(
+         l.create_instance(new()),
+         Err(Error::AlreadyExists { .. })
       ));
-      return Err(
-            "Downloaded artifact is an installer/archive and cannot be launched directly. Install it manually, then attach the extracted game directory as a version."
-                .to_string(),
-        );
-   };
-
-   let install = GameVersionInstall {
-      id: version_id,
-      version,
-      path: registered_path,
-      source: GameVersionSource::LithicDownload,
-      os: Some(opts.os_type.clone()),
-   };
-   add_or_update_game_version(install.clone()).await?;
-   progress(GameVersionInstallEvent::Log(format!(
-      "Registered {} at {}",
-      install.id,
-      install.path.display()
-   )));
-   Ok(install)
-}
-
-pub async fn install_game_version(opts: GameVersionInstallOptions) -> Result<GameVersionInstall, String> {
-   install_game_version_with_progress(opts, |_: GameVersionInstallEvent| {}).await
-}
-
-pub async fn launch_instance(instance_id: Option<String>) -> Result<(), String> {
-   ensure_instances_migrated().await?;
-   let (active_id, instance, version) = {
-      let config = get_config().read().await;
-      let active_id = instance_id
-         .or_else(|| config.active_instance_id.clone())
-         .ok_or_else(|| "No active instance selected".to_string())?;
-      let Some(instance) = config.instances.iter().find(|x| x.id == active_id).cloned() else {
-         return Err(format!("Instance not found: {active_id}"));
-      };
-      if instance.data_dir.as_os_str().is_empty() {
-         return Err("Instance data_dir is empty".to_string());
-      }
-      let Some(version) = config
-         .game_versions
-         .iter()
-         .find(|x| x.id == instance.game_version_id)
-         .cloned()
-      else {
-         return Err("Instance has no valid game version reference".to_string());
-      };
-      (active_id, instance, version)
-   };
-
-   let Some((command, mut args)) = find_executable(&version.path) else {
-      return Err("Unable to locate Vintage Story executable in selected version path".to_string());
-   };
-
-   args.push(format!("--dataPath={}", instance.data_dir.display()));
-   args.extend(instance.start_params.split_whitespace().map(ToString::to_string));
-
-   // Mirror the vendor's run.sh: launch from the game directory and use the
-   // bundled fonts.conf when present.
-   let fonts_conf = version.path.join("fonts.conf");
-
-   // Redirect game output to a log file so startup failures (e.g. a missing
-   // .NET runtime) are diagnosable instead of surfacing as a bare exit code.
-   let log_path = instance.data_dir.join("lithic-launch.log");
-   if let Some(parent) = log_path.parent() {
-      tokio::fs::create_dir_all(parent)
-         .await
-         .map_err(|e| e.to_string())?;
-   }
-   let stdout_log = File::create(&log_path).await.map_err(|e| e.to_string())?;
-   let stderr_log = stdout_log.try_clone().await.map_err(|e| e.to_string())?;
-
-   let start = now_ms();
-   let mut cmd = tokio::process::Command::new(command);
-   cmd.args(args)
-      .current_dir(&version.path)
-      .stdout(stdout_log.into_std().await)
-      .stderr(stderr_log.into_std().await);
-   if fonts_conf.exists() {
-      cmd.env("FONTCONFIG_FILE", &fonts_conf);
-   }
-   for (k, v) in parse_env_vars(&instance.env_vars) {
-      cmd.env(k, v);
-   }
-   let status = cmd.status().await.map_err(|e| e.to_string())?;
-   let end = now_ms();
-
-   {
-      let mut config = get_config().write().await;
-      if let Some(instance) = config.instances.iter_mut().find(|x| x.id == active_id) {
-         instance.last_played_at = end;
-         instance.total_play_time_ms += (end - start).max(0);
-         config.save(None).map_err(|e| e.to_string())?;
-      }
+      assert!(
+         l.create_instance(NewInstance {
+            name: "y".into(),
+            id: Some("../y".into()),
+            ..Default::default()
+         })
+         .is_err()
+      );
    }
 
-   if !status.success() {
-      let tail = launch_log_tail(&log_path).await;
-      return Err(if tail.is_empty() {
-         format!("Game exited with status: {status} (log: {})", log_path.display())
-      } else {
-         format!(
-            "Game exited with status: {status}. {tail} (log: {})",
-            log_path.display()
-         )
-      });
+   #[test]
+   fn update_rereads_and_keeps_other_fields() {
+      let (_d, l) = lithic();
+      let i = l
+         .create_instance(NewInstance {
+            name: "a".into(),
+            ..Default::default()
+         })
+         .unwrap();
+      l.record_play_session(&i.id, 1000, 61_000).unwrap();
+      l.update_instance(&i.id, |x| {
+         x.name = "renamed".into();
+         Ok(())
+      })
+      .unwrap();
+      let got = l.instance(&i.id).unwrap();
+      assert_eq!(got.name, "renamed");
+      assert_eq!(got.stats.play_time_ms, 60_000);
+      assert_eq!(got.stats.last_played_at, Some(61_000));
    }
-   Ok(())
-}
 
-/// Last few non-empty lines of the launch log, for surfacing startup failures.
-async fn launch_log_tail(path: &Path) -> String {
-   let mut file = match File::open(path).await {
-      Ok(file) => file,
-      Err(_) => return String::new(),
-   };
-   let len = file.metadata().await.map(|m| m.len()).unwrap_or(0);
-   if file
-      .seek(std::io::SeekFrom::Start(len.saturating_sub(4096)))
-      .await
-      .is_err()
-   {
-      return String::new();
+   #[test]
+   fn shared_data_dir_is_refused() {
+      let (d, l) = lithic();
+      let shared = d.path().join("shared");
+      l.create_instance(NewInstance {
+         name: "a".into(),
+         data_dir: Some(shared.clone()),
+         ..Default::default()
+      })
+      .unwrap();
+      let err = l
+         .create_instance(NewInstance {
+            name: "b".into(),
+            data_dir: Some(shared),
+            ..Default::default()
+         })
+         .unwrap_err();
+      assert!(matches!(err, Error::InUse { .. }));
    }
-   let mut buf = Vec::new();
-   if file.read_to_end(&mut buf).await.is_err() {
-      return String::new();
+
+   #[test]
+   fn delete_keeps_external_data_and_clears_active() {
+      let (d, l) = lithic();
+      let external = d.path().join("VintagestoryData");
+      fs::create_dir_all(external.join("Saves")).unwrap();
+      let i = l
+         .create_instance(NewInstance {
+            name: "adopted".into(),
+            data_dir: Some(external.clone()),
+            ..Default::default()
+         })
+         .unwrap();
+      l.set_active_instance(Some(&i.id)).unwrap();
+      l.delete_instance(&i.id).unwrap();
+      assert!(external.join("Saves").is_dir());
+      assert!(!i.dir.exists());
+      assert_eq!(l.settings().unwrap().active_instance, None);
    }
-   let text = String::from_utf8_lossy(&buf);
-   let tail: Vec<&str> = text
-      .lines()
-      .filter(|line| !line.trim().is_empty())
-      .rev()
-      .take(5)
-      .collect();
-   tail
-      .iter()
-      .rev()
-      .copied()
-      .collect::<Vec<_>>()
-      .join(" | ")
-      .chars()
-      .take(600)
-      .collect()
+
+   #[test]
+   fn clone_copies_mods_and_optionally_saves() {
+      let (_d, l) = lithic();
+      let src = l
+         .create_instance(NewInstance {
+            name: "src".into(),
+            game_version: Some("1.21.5".into()),
+            ..Default::default()
+         })
+         .unwrap();
+      fs::write(src.mods_dir().join("a.zip"), "zip").unwrap();
+      fs::create_dir_all(src.data_dir().join("Saves")).unwrap();
+      fs::write(src.data_dir().join("Saves/w.vcdbs"), "w").unwrap();
+      fs::create_dir_all(src.data_dir().join("Logs")).unwrap();
+      fs::write(src.data_dir().join("clientsettings.json"), "{}").unwrap();
+
+      let without = l.clone_instance(&src.id, "copy", false).unwrap();
+      assert!(without.mods_dir().join("a.zip").is_file());
+      assert!(without.data_dir().join("clientsettings.json").is_file());
+      assert!(!without.data_dir().join("Saves").exists());
+      assert!(!without.data_dir().join("Logs").exists());
+      assert_eq!(without.game_version.as_deref(), Some("1.21.5"));
+
+      let with = l.clone_instance(&src.id, "copy", true).unwrap();
+      assert!(with.data_dir().join("Saves/w.vcdbs").is_file());
+   }
 }

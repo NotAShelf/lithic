@@ -12,5 +12,3 @@ repository.workspace   = true
 [dependencies]
 fluent      = { workspace = true }
 unic-langid = { workspace = true }
-
-[build-dependencies]

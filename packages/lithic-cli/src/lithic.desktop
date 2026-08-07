@@ -1,7 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Lithic Mod Manager
-Exec={LITHIC_PATH} install %u -w
-Terminal=true
-StartupNotify=False
-MimeType=x-scheme-handler/vintagestorymodinstall;

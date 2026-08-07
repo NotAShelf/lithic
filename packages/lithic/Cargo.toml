@@ -10,7 +10,5 @@ homepage.workspace     = true
 repository.workspace   = true
 
 [dependencies]
-color-eyre = { workspace = true }
 lithic-cli = { workspace = true }
 lithic-gui = { workspace = true }
-tokio      = { workspace = true }
