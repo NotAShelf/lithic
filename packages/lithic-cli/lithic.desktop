@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Lithic
+GenericName=Vintage Story launcher
+Comment=Manage Vintage Story instances, game versions and mods
+Exec=lithic %u
+Terminal=false
+StartupNotify=true
+Categories=Game;
+Keywords=vintage story;vintagestory;mods;launcher;
+MimeType=x-scheme-handler/vintagestorymodinstall;

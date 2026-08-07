@@ -103,6 +103,9 @@ pub enum Command {
    #[command(subcommand, visible_alias = "config")]
    Settings(SettingsCommand),
 
+   /// Make install buttons on mods.vintagestory.at open lithic (Linux)
+   DesktopEntry,
+
    /// Print a shell completion script
    Completions {
       #[arg(value_enum)]

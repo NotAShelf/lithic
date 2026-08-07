@@ -1,5 +1,6 @@
 mod account;
 mod browse;
+mod desktop;
 mod game;
 mod instance;
 mod launch;
@@ -29,6 +30,7 @@ pub async fn run(ctx: &Ctx, command: Command) -> Result {
       Command::Account(cmd) => account::run(ctx, cmd).await,
       Command::Pack(cmd) => pack::run(ctx, cmd).await,
       Command::Settings(cmd) => settings::run(ctx, cmd),
+      Command::DesktopEntry => desktop::install(ctx),
       Command::Completions { .. } => Ok(()),
    }
 }
