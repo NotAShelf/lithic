@@ -17,6 +17,8 @@ pub struct Target {
 /// the newest release declaring the target game version or another patch of
 /// the same minor version wins; releases that declare nothing are the fallback.
 /// Prereleases are only considered when allowed or when no stable release fits.
+/// # Errors
+/// Returns an error when the pin is unavailable or no downloadable release fits the target.
 pub fn pick_release<'a>(details: &'a ModDetails, target: &Target, pin: Option<&str>) -> Result<&'a Release> {
    let label = details.mod_id().unwrap_or(&details.name).to_string();
    let usable = || {
@@ -36,9 +38,11 @@ pub fn pick_release<'a>(details: &'a ModDetails, target: &Target, pin: Option<&s
          .ok_or_else(|| Error::not_found(Kind::Release, format!("{label}@{pin}")));
    }
 
-   let fit = |r: &Release| match &target.game_version {
-      Some(game) => version::fit(&r.tags, game),
-      None => Fit::Exact,
+   let fit = |r: &Release| {
+      target
+         .game_version
+         .as_ref()
+         .map_or(Fit::Exact, |game| version::fit(&r.tags, game))
    };
 
    let compatible: Vec<&Release> = usable().filter(|r| fit(r) >= Fit::SameMinor).collect();
@@ -78,6 +82,10 @@ pub fn pick_release<'a>(details: &'a ModDetails, target: &Target, pin: Option<&s
 }
 
 #[cfg(test)]
+#[expect(
+   clippy::unwrap_used,
+   reason = "test setup and assertions intentionally fail on error"
+)]
 mod tests {
    use super::*;
 

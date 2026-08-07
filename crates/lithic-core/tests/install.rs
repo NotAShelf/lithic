@@ -1,17 +1,24 @@
 //! Installs, dependency resolution, updates and pins against a local stand-in
-//! for the ModDB.
+//! for the `ModDB`.
+
+#![expect(
+   clippy::unwrap_used,
+   reason = "test setup and assertions intentionally fail on error"
+)]
 
 use std::collections::HashMap;
-use std::io::Write;
+use std::fs;
+use std::io::{Cursor, Write};
 use std::sync::{Arc, Mutex};
 
 use lithic_core::instance::NewInstance;
 use lithic_core::moddb::ModDb;
-use lithic_core::mods::{InstallOptions, ModRef, Reason};
-use lithic_core::{Cancel, Error, Lithic, Paths};
+use lithic_core::mods::{InstallOptions, ModRef, Reason, problems};
+use lithic_core::{Cancel, Error, Instance, Lithic, Paths};
 use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
+use zip::write::SimpleFileOptions;
 
 #[derive(Default)]
 struct Fake {
@@ -22,10 +29,10 @@ struct Fake {
 type Shared = Arc<Mutex<Fake>>;
 
 fn mod_zip(modinfo: &serde_json::Value) -> Vec<u8> {
-   let mut buf = std::io::Cursor::new(Vec::new());
+   let mut buf = Cursor::new(Vec::new());
    {
       let mut w = zip::ZipWriter::new(&mut buf);
-      w.start_file("modinfo.json", zip::write::SimpleFileOptions::default())
+      w.start_file("modinfo.json", SimpleFileOptions::default())
          .unwrap();
       w.write_all(modinfo.to_string().as_bytes()).unwrap();
       w.finish().unwrap();
@@ -46,12 +53,9 @@ fn publish(
 ) {
    let mut f = fake.lock().unwrap();
    let file = format!("{mod_id}-{version}.zip");
-   f.files.insert(
-      file.clone(),
-      mod_zip(
-         &json!({"modid": mod_id, "name": mod_id.to_uppercase(), "version": version, "dependencies": deps}),
-      ),
-   );
+   let mut metadata = json!({"modid": mod_id, "name": mod_id.to_uppercase(), "version": version});
+   metadata["dependencies"] = deps;
+   f.files.insert(file.clone(), mod_zip(&metadata));
    let release = json!({
       "releaseid": moddb_id * 100 + i64::try_from(f.files.len()).unwrap(),
       "mainfile": format!("{base}/files/{file}?dl={file}"),
@@ -76,7 +80,7 @@ async fn serve(fake: Shared) -> String {
          let Ok((mut sock, _)) = listener.accept().await else {
             return;
          };
-         let fake = fake.clone();
+         let fake = Arc::clone(&fake);
          tokio::spawn(async move {
             let mut buf = vec![0u8; 8192];
             let mut len = 0;
@@ -98,23 +102,29 @@ async fn serve(fake: Shared) -> String {
                .to_string();
             let (status, body, kind) = {
                let f = fake.lock().unwrap();
-               if let Some(id) = path.strip_prefix("/mod/") {
-                  match f.mods.get(&id.to_lowercase()) {
-                     Some(m) => (
-                        "200 OK",
-                        json!({"statuscode": "200", "mod": m}).to_string().into_bytes(),
-                        "application/json",
-                     ),
-                     None => ("200 OK", br#"{"statuscode":"404"}"#.to_vec(), "application/json"),
-                  }
-               } else if let Some(name) = path.strip_prefix("/files/") {
-                  match f.files.get(name) {
-                     Some(bytes) => ("200 OK", bytes.clone(), "application/zip"),
-                     None => ("404 Not Found", Vec::new(), "text/plain"),
-                  }
-               } else {
-                  ("404 Not Found", Vec::new(), "text/plain")
-               }
+               path.strip_prefix("/mod/").map_or_else(
+                  || {
+                     path
+                        .strip_prefix("/files/")
+                        .and_then(|name| f.files.get(name))
+                        .map_or_else(
+                           || ("404 Not Found", Vec::new(), "text/plain"),
+                           |bytes| ("200 OK", bytes.clone(), "application/zip"),
+                        )
+                  },
+                  |id| {
+                     f.mods.get(&id.to_lowercase()).map_or_else(
+                        || ("200 OK", br#"{"statuscode":"404"}"#.to_vec(), "application/json"),
+                        |m| {
+                           (
+                              "200 OK",
+                              json!({"statuscode": "200", "mod": m}).to_string().into_bytes(),
+                              "application/json",
+                           )
+                        },
+                     )
+                  },
+               )
             };
             let head = format!(
                "HTTP/1.1 {status}\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -128,10 +138,10 @@ async fn serve(fake: Shared) -> String {
    base
 }
 
-async fn setup() -> (tempfile::TempDir, Lithic, lithic_core::Instance, Shared, String) {
+async fn setup() -> (tempfile::TempDir, Lithic, Instance, Shared, String) {
    let dir = tempfile::tempdir().unwrap();
    let fake: Shared = Arc::default();
-   let base = serve(fake.clone()).await;
+   let base = serve(Arc::clone(&fake)).await;
    let mut lithic = Lithic::new(Paths::rooted(dir.path())).unwrap();
    lithic.moddb = ModDb::with_base(lithic.http.clone(), &base);
    let instance = lithic
@@ -207,7 +217,7 @@ async fn install_resolves_dependencies_for_the_game_version() {
    assert!(lock.mods["lib"].dependency);
    assert!(!lock.mods["app"].dependency);
    assert_eq!(lock.mods["app"].moddb_id, Some(1));
-   assert!(lithic_core::mods::problems(&l.installed_mods(&i).unwrap()).is_empty());
+   assert!(problems(&l.installed_mods(&i).unwrap()).is_empty());
 
    let again = l
       .install_mods(&i, &[ModRef::parse("app").unwrap()], &opts())
@@ -251,7 +261,7 @@ async fn updates_replace_files_and_respect_pins() {
    assert!(i.mods_dir().join("app-1.1.0.zip").is_file());
    assert!(!i.mods_dir().join("app-1.0.0.zip").exists());
    let backups = l.paths.backups_dir().join(&i.id).join("app");
-   assert_eq!(std::fs::read_dir(backups).unwrap().count(), 1);
+   assert_eq!(fs::read_dir(backups).unwrap().count(), 1);
 
    l.set_mod_pin(&i, "other", None).unwrap();
    let updates = l.check_updates(&i, &Cancel::new()).await.unwrap();
@@ -313,7 +323,7 @@ async fn failures_are_reported_per_mod() {
 async fn changes_are_refused_while_another_operation_runs() {
    let (_d, l, i, fake, base) = setup().await;
    publish(&fake, &base, 1, "app", "1.0.0", &["1.21.5"], json!({}));
-   let held = std::fs::OpenOptions::new()
+   let held = fs::OpenOptions::new()
       .create(true)
       .truncate(false)
       .write(true)
@@ -349,9 +359,9 @@ async fn a_failed_update_keeps_the_old_mod() {
    let updates = l.check_updates(&i, &Cancel::new()).await.unwrap();
 
    let mods = i.mods_dir();
-   std::fs::set_permissions(&mods, std::fs::Permissions::from_mode(0o555)).unwrap();
+   fs::set_permissions(&mods, fs::Permissions::from_mode(0o555)).unwrap();
    let report = l.update_mods(&i, &updates, &opts()).await.unwrap();
-   std::fs::set_permissions(&mods, std::fs::Permissions::from_mode(0o755)).unwrap();
+   fs::set_permissions(&mods, fs::Permissions::from_mode(0o755)).unwrap();
 
    assert_eq!(report.failures.len(), 1);
    assert!(report.changes.is_empty());

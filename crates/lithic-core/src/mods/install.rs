@@ -8,13 +8,15 @@
 //! the instance untouched.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::{fs, mem};
 
 use futures::stream::{self, StreamExt};
 use serde::{Deserialize, Serialize};
+use tokio::task::spawn_blocking;
 
 use super::resolve::{Target, pick_release};
-use super::{InstalledMod, LockEntry, ModRef, OperationLock, free_path};
+use super::{InstalledMod, LockEntry, ModLock, ModRef, OperationLock, free_path};
 use crate::error::{Error, Result};
 use crate::fsutil::{self, now_ms};
 use crate::http::Download;
@@ -74,13 +76,14 @@ pub struct Report {
 }
 
 impl Report {
-   pub fn is_success(&self) -> bool {
+   #[must_use]
+   pub const fn is_success(&self) -> bool {
       self.failures.is_empty()
    }
 }
 
 /// An available update for an installed mod.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Update {
    pub mod_id: String,
    pub name: String,
@@ -113,7 +116,17 @@ struct Staged {
    pin: Option<String>,
 }
 
+struct StageContext<'a> {
+   installed: &'a [InstalledMod],
+   lock: &'a ModLock,
+   target: &'a Target,
+   staging: &'a Path,
+   opts: &'a InstallOptions,
+}
+
 impl Lithic {
+   /// # Errors
+   /// Returns an error if the instance is busy, its settings cannot be read, or installation is cancelled.
    pub async fn install_mods(
       &self,
       instance: &Instance,
@@ -132,8 +145,10 @@ impl Lithic {
       self.run_jobs(instance, jobs, opts).await
    }
 
-   /// Looks up every installed mod on the ModDB and returns those with a
-   /// newer compatible release. Mods not on the ModDB are skipped.
+   /// Looks up every installed mod on the `ModDB` and returns those with a
+   /// newer compatible release. Mods not on the `ModDB` are skipped.
+   /// # Errors
+   /// Returns an error if settings or installed mods cannot be read, or cancellation is requested.
    pub async fn check_updates(&self, instance: &Instance, cancel: &Cancel) -> Result<Vec<Update>> {
       let settings = self.settings()?;
       let target = Target {
@@ -200,6 +215,8 @@ impl Lithic {
 
    /// Applies updates, typically the result of [`Lithic::check_updates`],
    /// possibly filtered by the user.
+   /// # Errors
+   /// Returns an error if the instance is busy, its settings cannot be read, or installation is cancelled.
    pub async fn update_mods(
       &self,
       instance: &Instance,
@@ -236,16 +253,15 @@ impl Lithic {
          .downloads_dir()
          .join(format!("{}-{}", instance.id, now_ms()));
 
+      let context = StageContext {
+         installed: &installed,
+         lock: &lock,
+         target: &target,
+         staging: &staging,
+         opts,
+      };
       let result = self
-         .resolve_and_stage(
-            &installed,
-            &lock,
-            jobs,
-            &target,
-            &staging,
-            opts,
-            settings.mods.concurrency,
-         )
+         .resolve_and_stage(jobs, &context, settings.mods.concurrency)
          .await;
       let result = match result {
          Ok((staged, mut report)) => {
@@ -262,17 +278,13 @@ impl Lithic {
       result
    }
 
-   #[allow(clippy::too_many_arguments)]
    async fn resolve_and_stage(
       &self,
-      installed: &[InstalledMod],
-      lock: &super::ModLock,
       jobs: Vec<Job>,
-      target: &Target,
-      staging: &std::path::Path,
-      opts: &InstallOptions,
+      context: &StageContext<'_>,
       concurrency: usize,
    ) -> Result<(Vec<Staged>, Report)> {
+      let StageContext { installed, opts, .. } = *context;
       let mut report = Report::default();
       let mut staged: BTreeMap<String, Staged> = BTreeMap::new();
       let mut attempted: BTreeSet<String> = BTreeSet::new();
@@ -288,14 +300,14 @@ impl Lithic {
       while !queue.is_empty() {
          opts.cancel.check()?;
          opts.reporter.step(Step::Resolving);
-         let wave: Vec<Job> = std::mem::take(&mut queue)
+         let wave: Vec<Job> = mem::take(&mut queue)
             .into_iter()
             .filter(|j| attempted.insert(j.id.to_ascii_lowercase()))
             .collect();
 
          let results: Vec<(Job, Result<Option<Staged>>)> = stream::iter(wave)
             .map(|job| async move {
-               let result = self.stage_one(&job, installed, lock, target, staging, opts).await;
+               let result = self.stage_one(&job, context).await;
                (job, result)
             })
             .buffer_unordered(concurrency.max(1))
@@ -362,39 +374,37 @@ impl Lithic {
       Ok((staged.into_values().collect(), report))
    }
 
-   async fn stage_one(
-      &self,
-      job: &Job,
-      installed: &[InstalledMod],
-      lock: &super::ModLock,
-      target: &Target,
-      staging: &std::path::Path,
-      opts: &InstallOptions,
-   ) -> Result<Option<Staged>> {
+   async fn stage_one(&self, job: &Job, context: &StageContext<'_>) -> Result<Option<Staged>> {
+      let StageContext {
+         installed,
+         lock,
+         target,
+         staging,
+         opts,
+      } = *context;
       opts.cancel.check()?;
       let key = job.id.to_ascii_lowercase();
-      let (moddb_id, name, release, details_mod_id) = match &job.resolved {
-         Some((id, name, release)) => (*id, name.clone(), release.clone(), release.mod_id.clone()),
-         None => {
-            let details: ModDetails = self.moddb.mod_details(&job.id).await?;
-            let lock_pin = lock
-               .mods
-               .get(&key)
-               .or_else(|| {
-                  details
-                     .mod_id()
-                     .and_then(|m| lock.mods.get(&m.to_ascii_lowercase()))
-               })
-               .and_then(|e| e.pin.clone());
-            let pin = job.pin.clone().or(lock_pin);
-            let release = pick_release(&details, target, pin.as_deref())?.clone();
-            (
-               details.id,
-               details.name.clone(),
-               release,
-               details.mod_id().map(ToString::to_string),
-            )
-         }
+      let (moddb_id, name, release, details_mod_id) = if let Some((id, name, release)) = &job.resolved {
+         (*id, name.clone(), release.clone(), release.mod_id.clone())
+      } else {
+         let details: ModDetails = self.moddb.mod_details(&job.id).await?;
+         let lock_pin = lock
+            .mods
+            .get(&key)
+            .or_else(|| {
+               details
+                  .mod_id()
+                  .and_then(|m| lock.mods.get(&m.to_ascii_lowercase()))
+            })
+            .and_then(|e| e.pin.clone());
+         let pin = job.pin.clone().or(lock_pin);
+         let release = pick_release(&details, target, pin.as_deref())?.clone();
+         (
+            details.id,
+            details.name.clone(),
+            release,
+            details.mod_id().map(ToString::to_string),
+         )
       };
 
       let mod_id = release
@@ -434,7 +444,7 @@ impl Lithic {
          .await?;
 
       let read_path = path.clone();
-      let info = tokio::task::spawn_blocking(move || modinfo::read(&read_path))
+      let info = spawn_blocking(move || modinfo::read(&read_path))
          .await
          .map_err(|e| Error::invalid(format!("reading {mod_id} failed: {e}")))??;
       if info.has_metadata && info.mod_id != mod_id {
@@ -472,7 +482,7 @@ impl Lithic {
 
       for s in staged {
          let mod_id = s.mod_id.clone();
-         if let Err(error) = self.apply_one(instance, installed, s, backups, report) {
+         if let Err(error) = self.apply_one(instance, installed, &s, backups, report) {
             report.failures.push(Failure {
                mod_id,
                needed_by: None,
@@ -491,7 +501,7 @@ impl Lithic {
       &self,
       instance: &Instance,
       installed: &[InstalledMod],
-      s: Staged,
+      s: &Staged,
       backups: bool,
       report: &mut Report,
    ) -> Result<()> {
@@ -520,7 +530,7 @@ impl Lithic {
          return Err(e);
       }
       let dest = free_path(&dir, &file_name);
-      std::fs::rename(&incoming, &dest).map_err(|e| crate::Error::io(&dest, e))?;
+      fs::rename(&incoming, &dest).map_err(|e| Error::io(&dest, e))?;
 
       let version = s.release.version.clone().unwrap_or_default();
       report.changes.push(Change {
@@ -545,7 +555,7 @@ impl Lithic {
          dependency: matches!(s.reason, Reason::Dependency { .. }),
          installed_at: Some(now_ms()),
       };
-      self.update_mod_lock(instance, |lock| {
+      Self::update_mod_lock(instance, |lock| {
          let entry = lock.mods.entry(s.mod_id.clone()).or_default();
          let was_explicit = entry.file.is_some() && !entry.dependency;
          let pin = if s.pin.is_some() {
