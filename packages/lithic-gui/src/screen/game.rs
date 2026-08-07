@@ -1,10 +1,11 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use iced::widget::{
    button, column, pick_list, progress_bar, row, scrollable, space, text, text_input, toggler,
 };
 use iced::{Center, Element, Fill, Task};
-use lithic_core::game::{Install, Platform};
+use lithic_core::game::{Install, Platform, find_executable};
+use lithic_core::version;
 
 use crate::app::{Message as AppMessage, OpKind, Outcome, Shared};
 use crate::i18n::{t, t1};
@@ -143,10 +144,10 @@ impl State {
          .iter()
          .filter_map(|(key, busy)| {
             let version = key.strip_prefix("game:")?;
-            let bar: Element<Message> = match busy.fraction() {
-               Some(f) => progress_bar(0.0..=1.0, f).girth(8).into(),
-               None => text(t("games-working")).size(12).style(style::muted).into(),
-            };
+            let bar: Element<Message> = busy.fraction().map_or_else(
+               || text(t("games-working")).size(12).style(style::muted).into(),
+               |f| progress_bar(0.0..=1.0, f).girth(8).into(),
+            );
             Some(
                widget::card(
                   column![
@@ -327,7 +328,7 @@ fn install_card<'a>(install: &'a Install, shared: &'a Shared) -> Element<'a, Mes
       .filter(|i| i.game_version.as_deref() == Some(install.version.as_str()))
       .map(|i| i.name.as_str())
       .collect();
-   let present = lithic_core::game::find_executable(&install.path).is_some();
+   let present = find_executable(&install.path).is_some();
    let mut badges = row![widget::badge(
       if install.managed {
          t("games-by-lithic")
@@ -377,7 +378,7 @@ fn install_card<'a>(install: &'a Install, shared: &'a Shared) -> Element<'a, Mes
 }
 
 /// A version number found in a folder name, such as `vintagestory-1.21.5`.
-fn guess_version(path: &std::path::Path) -> Option<String> {
+fn guess_version(path: &Path) -> Option<String> {
    path.ancestors().take(3).find_map(|p| {
       let name = p.file_name()?.to_string_lossy();
       name
@@ -385,8 +386,7 @@ fn guess_version(path: &std::path::Path) -> Option<String> {
          .flat_map(|part| part.split('_'))
          .find_map(|part| {
             let candidate = part.trim_start_matches(|c: char| !c.is_ascii_digit());
-            (lithic_core::version::parse(candidate).is_some() && candidate.contains('.'))
-               .then(|| candidate.to_string())
+            (version::parse(candidate).is_some() && candidate.contains('.')).then(|| candidate.to_string())
          })
    })
 }
