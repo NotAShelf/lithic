@@ -35,6 +35,12 @@ pub struct Localizer {
 }
 
 impl Localizer {
+   /// Builds a localizer from Fluent sources.
+   ///
+   /// # Errors
+   ///
+   /// Returns an error for an invalid language tag, malformed Fluent source,
+   /// or duplicate message IDs.
    pub fn from_sources(lang: &str, sources: &[&str]) -> Result<Self, String> {
       let lang: LanguageIdentifier = lang.parse().map_err(|e| format!("invalid language tag: {e}"))?;
       let mut bundle = FluentBundle::new_concurrent(vec![lang]);
@@ -51,6 +57,16 @@ impl Localizer {
       Ok(Self { bundle })
    }
 
+   /// Loads the bundled English messages.
+   ///
+   /// # Panics
+   ///
+   /// Panics if the bundled English catalog is invalid.
+   #[must_use]
+   #[expect(
+      clippy::expect_used,
+      reason = "invalid bundled messages are a packaging error"
+   )]
    pub fn english() -> Self {
       Self::from_sources("en-US", ENGLISH).expect("the bundled English messages are valid")
    }
