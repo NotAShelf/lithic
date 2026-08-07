@@ -100,6 +100,21 @@ async fn dispatch(cli: Cli) -> ExitCode {
       }
    };
 
+   match lithic.migrate() {
+      Ok(Some(report)) => {
+         fallback_ui.status("Moved your lithic 1.x configuration to the new layout:");
+         for note in &report.notes {
+            fallback_ui.status(format!("  {note}"));
+         }
+         fallback_ui.status(format!("The old file is kept at {}", report.backup.display()));
+      }
+      Ok(None) => {}
+      Err(e) => {
+         fallback_ui.error(format!("could not migrate the lithic 1.x configuration: {e}"));
+         return ExitCode::FAILURE;
+      }
+   }
+
    let settings = match lithic.settings() {
       Ok(s) => s,
       Err(e) => {
