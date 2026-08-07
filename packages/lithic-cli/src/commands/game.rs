@@ -1,11 +1,13 @@
+use std::env;
+
 use comfy_table::Cell;
-use lithic_core::game::Platform;
+use lithic_core::game::{Platform, find_executable};
 use lithic_core::{Cancel, Freshness};
 
 use super::resolve_game_version;
 use crate::Ctx;
 use crate::args::{GameCommand, PlatformArg};
-use crate::ui::{Result, fail};
+use crate::ui::{Result, Ui, fail};
 
 pub async fn run(ctx: &Ctx, cmd: GameCommand) -> Result {
    match cmd {
@@ -21,7 +23,7 @@ pub async fn run(ctx: &Ctx, cmd: GameCommand) -> Result {
             .take(limit)
             .collect();
          if ctx.ui.json {
-            return ctx.ui.print_json(&releases);
+            return Ui::print_json(&releases);
          }
          let mut table = ctx.ui.table();
          table.set_header(vec!["Version", "Channel", "Size", "Installed"]);
@@ -42,7 +44,7 @@ pub async fn run(ctx: &Ctx, cmd: GameCommand) -> Result {
                }),
             ]);
          }
-         ctx.ui.print_table(&table);
+         Ui::print_table(&table);
          Ok(())
       }
       GameCommand::Install { version } => {
@@ -55,7 +57,7 @@ pub async fn run(ctx: &Ctx, cmd: GameCommand) -> Result {
          drop(progress);
          let install = result?;
          if ctx.ui.json {
-            return ctx.ui.print_json(&install);
+            return Ui::print_json(&install);
          }
          ctx.ui.success(format!(
             "installed Vintage Story {} in {}",
@@ -112,7 +114,7 @@ pub async fn run(ctx: &Ctx, cmd: GameCommand) -> Result {
          let settings = ctx.lithic.settings()?;
          let dir = dir
             .or(settings.game.download_dir)
-            .or_else(|| std::env::current_dir().ok())
+            .or_else(|| env::current_dir().ok())
             .unwrap_or_default();
          let progress = ctx.ui.progress();
          let result = ctx
@@ -131,7 +133,7 @@ pub async fn run(ctx: &Ctx, cmd: GameCommand) -> Result {
 fn list(ctx: &Ctx) -> Result {
    let installs = ctx.lithic.game_installs()?;
    if ctx.ui.json {
-      return ctx.ui.print_json(&installs);
+      return Ui::print_json(&installs);
    }
    if installs.is_empty() {
       ctx.ui
@@ -147,7 +149,7 @@ fn list(ctx: &Ctx) -> Result {
          .filter(|x| x.game_version.as_deref() == Some(i.version.as_str()))
          .map(|x| x.name.as_str())
          .collect();
-      let path = if lithic_core::game::find_executable(&i.path).is_some() {
+      let path = if find_executable(&i.path).is_some() {
          i.path.display().to_string()
       } else {
          format!("{} (missing)", i.path.display())
@@ -159,11 +161,11 @@ fn list(ctx: &Ctx) -> Result {
          Cell::new(users.join(", ")),
       ]);
    }
-   ctx.ui.print_table(&table);
+   Ui::print_table(&table);
    Ok(())
 }
 
-fn to_platform(p: PlatformArg) -> Platform {
+const fn to_platform(p: PlatformArg) -> Platform {
    match p {
       PlatformArg::Linux => Platform::Linux,
       PlatformArg::Windows => Platform::Windows,
