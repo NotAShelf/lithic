@@ -2,11 +2,13 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::LazyLock;
 
+use iced::alignment::Horizontal;
 use iced::widget::{
    button, column, container, image, pick_list, row, scrollable, space, svg, text, text_input, toggler,
    tooltip,
 };
-use iced::{Center, Element, Fill, Length, Task, Theme};
+use iced::{Center, Color, Element, Fill, Length, Task, Theme};
+use lithic_core::http::Http;
 use lithic_core::moddb::{self, ModDetails, ModSummary, Query, Sort};
 use lithic_core::mods::resolve::{Target, pick_release};
 use lithic_core::mods::{InstallOptions, ModRef};
@@ -27,13 +29,13 @@ static INSTALL_HANDLE: LazyLock<svg::Handle> = LazyLock::new(|| svg::Handle::fro
 pub struct SortChoice(Sort);
 
 impl SortChoice {
-   const ALL: [SortChoice; 6] = [
-      SortChoice(Sort::Relevance),
-      SortChoice(Sort::Downloads),
-      SortChoice(Sort::Trending),
-      SortChoice(Sort::Updated),
-      SortChoice(Sort::Follows),
-      SortChoice(Sort::Name),
+   const ALL: [Self; 6] = [
+      Self(Sort::Relevance),
+      Self(Sort::Downloads),
+      Self(Sort::Trending),
+      Self(Sort::Updated),
+      Self(Sort::Follows),
+      Self(Sort::Name),
    ];
 }
 
@@ -165,7 +167,7 @@ pub fn refresh_installed(state: &State, shared: &Shared) -> Task<AppMessage> {
             .map(|m| (m.info.mod_id, m.info.version))
             .collect())
       }),
-      move |r| AppMessage::Browse(Message::Installed(target.clone(), r)),
+      move |r| AppMessage::Browse(Message::Installed(target, r)),
    )
 }
 
@@ -332,10 +334,7 @@ impl State {
             }
          }
          Message::Logo(url, bytes) => {
-            let logo = match bytes {
-               Some(b) => Logo::Ready(image::Handle::from_bytes(b)),
-               None => Logo::Failed,
-            };
+            let logo = bytes.map_or(Logo::Failed, |b| Logo::Ready(image::Handle::from_bytes(b)));
             self.logos.insert(url, logo);
          }
          Message::More => {
@@ -613,10 +612,10 @@ impl State {
                         text
                      } else {
                         let bg = p.background.weakest.color;
-                        iced::Color::from_rgb(
-                           bg.r * 0.65 + text.r * 0.35,
-                           bg.g * 0.65 + text.g * 0.35,
-                           bg.b * 0.65 + text.b * 0.35,
+                        Color::from_rgb(
+                           bg.r.mul_add(0.65, text.r * 0.35),
+                           bg.g.mul_add(0.65, text.g * 0.35),
+                           bg.b.mul_add(0.65, text.b * 0.35),
                         )
                      };
                      svg::Style { color: Some(color) }
@@ -648,7 +647,7 @@ impl State {
                .size(12)
                .style(style::muted)
                .width(76)
-               .align_x(iced::alignment::Horizontal::Right),
+               .align_x(Horizontal::Right),
             row![
                button(text(t("browse-details")).size(13))
                   .width(Length::Fixed(64.0))
@@ -810,10 +809,10 @@ impl State {
    }
 }
 
-fn logo_task(http: lithic_core::http::Http, url: String) -> Task<AppMessage> {
+fn logo_task(http: Http, url: String) -> Task<AppMessage> {
    let key = url.clone();
    Task::perform(async move { http.get_bytes(&url).await.ok() }, move |bytes| {
-      AppMessage::Browse(Message::Logo(key.clone(), bytes))
+      AppMessage::Browse(Message::Logo(key, bytes))
    })
 }
 
@@ -835,8 +834,13 @@ fn tag_range(tags: &[String]) -> String {
 }
 
 #[cfg(test)]
+#[expect(
+   clippy::unwrap_used,
+   reason = "test setup and assertions intentionally fail on error"
+)]
 mod tests {
    use super::*;
+   use lithic_core::{Lithic, Paths};
 
    fn summary(id: i64, name: &str, modid: &str, downloads: i64) -> ModSummary {
       ModSummary {
@@ -850,7 +854,7 @@ mod tests {
 
    fn shared() -> (tempfile::TempDir, Shared) {
       let dir = tempfile::tempdir().unwrap();
-      let lithic = lithic_core::Lithic::new(lithic_core::Paths::rooted(dir.path())).unwrap();
+      let lithic = Lithic::new(Paths::rooted(dir.path())).unwrap();
       (dir, Shared::new(lithic))
    }
 
