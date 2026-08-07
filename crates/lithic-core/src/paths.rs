@@ -4,7 +4,7 @@ use crate::error::{Error, Result};
 
 /// Where lithic keeps its files.
 ///
-/// `config` holds settings, `data` holds instances and game
+/// `config` holds settings and accounts, `data` holds instances and game
 /// builds, `cache` holds things that can be re-downloaded at any time. Each
 /// root can be overridden with `LITHIC_CONFIG_DIR`, `LITHIC_DATA_DIR` and
 /// `LITHIC_CACHE_DIR`.
@@ -45,6 +45,14 @@ impl Paths {
 
    pub fn settings_file(&self) -> PathBuf {
       self.config.join("settings.toml")
+   }
+
+   pub fn accounts_file(&self) -> PathBuf {
+      self.config.join("accounts.toml")
+   }
+
+   pub fn sessions_dir(&self) -> PathBuf {
+      self.config.join("sessions")
    }
 
    pub fn instances_dir(&self) -> PathBuf {

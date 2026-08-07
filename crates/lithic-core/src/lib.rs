@@ -1,5 +1,6 @@
-//! Core operations for instances, mods, and game builds.
+//! Core operations for instances, mods, game builds, and accounts.
 
+pub mod auth;
 pub mod error;
 pub mod fsutil;
 pub mod game;

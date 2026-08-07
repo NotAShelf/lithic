@@ -1,3 +1,4 @@
+pub mod accounts;
 pub mod browse;
 pub mod game;
 pub mod instance;

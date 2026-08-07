@@ -34,6 +34,24 @@ pub enum Folder {
    Logs,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AccountChoice {
+   Active(Option<String>),
+   Account { uid: String, name: String },
+}
+
+impl fmt::Display for AccountChoice {
+   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+      match self {
+         AccountChoice::Active(Some(name)) => {
+            f.write_str(&t1("instance-account-active", "name", name.clone()))
+         }
+         AccountChoice::Active(None) => f.write_str(&t("instance-account-none")),
+         AccountChoice::Account { name, .. } => f.write_str(name),
+      }
+   }
+}
+
 #[derive(Debug)]
 enum Confirm {
    RemoveMod {
@@ -52,6 +70,7 @@ enum Confirm {
 struct Form {
    name: String,
    game: Option<GameChoice>,
+   account: Option<AccountChoice>,
    args: String,
    env: text_editor::Content,
    wrapper: String,
@@ -77,6 +96,7 @@ impl Form {
       Self {
          name: instance.name.clone(),
          game,
+         account: Some(account_choice(instance.account.as_deref(), shared)),
          args: shell_words::join(&instance.launch.args),
          env: text_editor::Content::with_text(&env),
          wrapper: shell_words::join(&instance.launch.wrapper),
@@ -106,6 +126,10 @@ impl Form {
       Ok(Parsed {
          name: self.name.trim().to_string(),
          game: self.game.as_ref().map(|g| g.version.clone()),
+         account: match &self.account {
+            Some(AccountChoice::Account { uid, .. }) => Some(uid.clone()),
+            _ => None,
+         },
          args,
          env,
          wrapper,
@@ -117,10 +141,28 @@ impl Form {
 struct Parsed {
    name: String,
    game: Option<String>,
+   account: Option<String>,
    args: Vec<String>,
    env: BTreeMap<String, String>,
    wrapper: Vec<String>,
    mods_dir: Option<PathBuf>,
+}
+
+fn account_choice(uid: Option<&str>, shared: &Shared) -> AccountChoice {
+   match uid.and_then(|u| shared.accounts.get(u)) {
+      Some(a) => AccountChoice::Account {
+         uid: a.uid.clone(),
+         name: a.playername.clone(),
+      },
+      None => AccountChoice::Active(
+         shared
+            .accounts
+            .active
+            .as_deref()
+            .and_then(|u| shared.accounts.get(u))
+            .map(|a| a.playername.clone()),
+      ),
+   }
 }
 
 #[derive(Debug, Default)]
@@ -179,6 +221,7 @@ pub enum Message {
 
    FormName(String),
    FormGame(GameChoice),
+   FormAccount(AccountChoice),
    FormArgs(String),
    FormEnv(text_editor::Action),
    FormWrapper(String),
@@ -505,6 +548,7 @@ impl State {
          Message::Cloned(Err(e)) => return shared.toasts.error(t("instance-clone-failed"), Some(e)),
          Message::FormName(v) => self.edit(|f| f.name = v),
          Message::FormGame(g) => self.edit(|f| f.game = Some(g)),
+         Message::FormAccount(a) => self.edit(|f| f.account = Some(a)),
          Message::FormArgs(v) => self.edit(|f| f.args = v),
          Message::FormWrapper(v) => self.edit(|f| f.wrapper = v),
          Message::FormEnv(action) => {
@@ -543,6 +587,7 @@ impl State {
                   lithic.update_instance(&id, |i| {
                      i.name = parsed.name;
                      i.game_version = parsed.game;
+                     i.account = parsed.account;
                      i.launch.args = parsed.args;
                      i.launch.env = parsed.env;
                      i.launch.wrapper = parsed.wrapper;
@@ -909,6 +954,19 @@ impl State {
 
    fn settings_tab<'a>(&'a self, instance: &'a Instance, shared: &'a Shared) -> Element<'a, Message> {
       let f = &self.form;
+      let mut accounts = vec![AccountChoice::Active(
+         shared
+            .accounts
+            .active
+            .as_deref()
+            .and_then(|u| shared.accounts.get(u))
+            .map(|a| a.playername.clone()),
+      )];
+      accounts.extend(shared.accounts.accounts.iter().map(|a| AccountChoice::Account {
+         uid: a.uid.clone(),
+         name: a.playername.clone(),
+      }));
+
       let mods_label = f
          .mods_dir
          .as_ref()
@@ -946,6 +1004,11 @@ impl State {
             pick_list(game_choices(shared), f.game.clone(), Message::FormGame)
                .placeholder(t("instances-pick-game")),
             None
+         ),
+         widget::field(
+            t("instance-account"),
+            pick_list(accounts, f.account.clone(), Message::FormAccount),
+            Some(t("instance-account-hint"))
          ),
          widget::field(
             t("instance-args"),

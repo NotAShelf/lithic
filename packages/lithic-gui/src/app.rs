@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 use futures::{SinkExt, StreamExt};
 use iced::widget::{button, column, container, row, scrollable, space, text};
 use iced::{Element, Fill, Subscription, Task, Theme, window};
+use lithic_core::auth::Accounts;
 use lithic_core::game::{Install, Manifest};
 use lithic_core::launch::{Exit, Session};
 use lithic_core::mods::{Change, Report};
@@ -11,7 +12,7 @@ use lithic_core::{Cancel, Event, Freshness, Instance, Lithic, Reporter, Settings
 
 use crate::i18n::{t, t1, t2};
 use crate::notify::{self, Notifications};
-use crate::screen::{browse, game, instance, instances, settings};
+use crate::screen::{accounts, browse, game, instance, instances, settings};
 use crate::task::blocking;
 use crate::{style, widget};
 
@@ -21,6 +22,7 @@ pub enum Page {
    Instance(String),
    Browse,
    Games,
+   Accounts,
    Settings,
 }
 
@@ -29,6 +31,7 @@ impl Page {
       match value {
          "browse" => Page::Browse,
          "games" | "game_versions" => Page::Games,
+         "accounts" => Page::Accounts,
          "settings" => Page::Settings,
          _ => Page::Instances,
       }
@@ -111,6 +114,10 @@ pub struct Shared {
    pub broken: Vec<(String, String)>,
    pub mod_counts: HashMap<String, usize>,
    pub installs: Vec<Install>,
+   pub accounts: Accounts,
+   /// Accounts with a stored session. Checked while loading, since asking
+   /// the keyring can be slow.
+   pub sessions: HashSet<String>,
    pub manifest: Option<Manifest>,
    pub running: HashMap<String, Session>,
    pub launching: HashSet<String>,
@@ -128,6 +135,8 @@ impl Shared {
          broken: Vec::new(),
          mod_counts: HashMap::new(),
          installs: Vec::new(),
+         accounts: Accounts::default(),
+         sessions: HashSet::new(),
          manifest: None,
          running: HashMap::new(),
          launching: HashSet::new(),
@@ -214,6 +223,8 @@ pub struct Snapshot {
    broken: Vec<(String, String)>,
    mod_counts: HashMap<String, usize>,
    installs: Vec<Install>,
+   accounts: Accounts,
+   sessions: HashSet<String>,
 }
 
 fn load_snapshot(lithic: &Lithic) -> lithic_core::Result<Snapshot> {
@@ -228,7 +239,15 @@ fn load_snapshot(lithic: &Lithic) -> lithic_core::Result<Snapshot> {
          )
       })
       .collect();
+   let accounts = lithic.accounts()?;
+   let sessions = accounts
+      .accounts
+      .iter()
+      .filter(|a| lithic.has_session(&a.uid))
+      .map(|a| a.uid.clone())
+      .collect();
    Ok(Snapshot {
+      sessions,
       settings: lithic.settings()?,
       broken: listing
          .broken
@@ -238,6 +257,7 @@ fn load_snapshot(lithic: &Lithic) -> lithic_core::Result<Snapshot> {
       instances: listing.instances,
       mod_counts,
       installs: lithic.game_installs()?,
+      accounts,
    })
 }
 
@@ -278,6 +298,7 @@ pub enum Message {
    Instance(instance::Message),
    Browse(browse::Message),
    Games(game::Message),
+   Accounts(accounts::Message),
    Settings(settings::Message),
 }
 
@@ -293,6 +314,7 @@ pub struct App {
    instance: Option<instance::State>,
    browse: browse::State,
    games: game::State,
+   accounts: accounts::State,
    settings: settings::State,
 }
 
@@ -309,6 +331,7 @@ impl App {
          instance: None,
          browse: browse::State::default(),
          games: game::State::default(),
+         accounts: accounts::State::default(),
          settings: settings::State,
          shared,
       };
@@ -381,6 +404,8 @@ impl App {
             self.shared.broken = s.broken;
             self.shared.mod_counts = s.mod_counts;
             self.shared.installs = s.installs;
+            self.shared.accounts = s.accounts;
+            self.shared.sessions = s.sessions;
             self.refresh_theme();
             let first_load = !self.shared.loaded;
             self.shared.loaded = true;
@@ -548,6 +573,7 @@ impl App {
          },
          Message::Browse(m) => self.browse.update(m, &mut self.shared),
          Message::Games(m) => self.games.update(m, &mut self.shared),
+         Message::Accounts(m) => self.accounts.update(m, &mut self.shared),
          Message::Settings(m) => {
             let task = self.settings.update(m, &mut self.shared);
             self.refresh_theme();
@@ -671,6 +697,7 @@ impl App {
          },
          Page::Browse => self.browse.view(&self.shared).map(Message::Browse),
          Page::Games => self.games.view(&self.shared).map(Message::Games),
+         Page::Accounts => self.accounts.view(&self.shared).map(Message::Accounts),
          Page::Settings => self.settings.view(&self.shared).map(Message::Settings),
       };
 
@@ -723,6 +750,16 @@ impl App {
             .on_press(Message::Navigate(page))
       };
 
+      let account = match self
+         .shared
+         .accounts
+         .active
+         .as_deref()
+         .and_then(|uid| self.shared.accounts.get(uid))
+      {
+         Some(a) => t1("sidebar-signed-in", "name", a.playername.clone()),
+         None => t("sidebar-signed-out"),
+      };
       let running = self.shared.running.len();
 
       let mut col = column![
@@ -731,6 +768,7 @@ impl App {
          item(t("nav-instances"), Page::Instances),
          item(t("nav-browse"), Page::Browse),
          item(t("nav-games"), Page::Games),
+         item(t("nav-accounts"), Page::Accounts),
          item(t("nav-settings"), Page::Settings),
          space::vertical(),
       ]
@@ -738,6 +776,7 @@ impl App {
       if running > 0 {
          col = col.push(text(t1("sidebar-running", "count", running)).size(12));
       }
+      col = col.push(text(account).size(12).style(style::muted));
       col = col.push(
          text(format!("v{}", env!("CARGO_PKG_VERSION")))
             .size(11)

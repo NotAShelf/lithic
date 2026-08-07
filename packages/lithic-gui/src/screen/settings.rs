@@ -60,14 +60,16 @@ pub enum StartPage {
    Instances,
    Browse,
    Games,
+   Accounts,
    Settings,
 }
 
 impl StartPage {
-   const ALL: [StartPage; 4] = [
+   const ALL: [StartPage; 5] = [
       StartPage::Instances,
       StartPage::Browse,
       StartPage::Games,
+      StartPage::Accounts,
       StartPage::Settings,
    ];
 
@@ -76,6 +78,7 @@ impl StartPage {
          StartPage::Instances => "instances",
          StartPage::Browse => "browse",
          StartPage::Games => "games",
+         StartPage::Accounts => "accounts",
          StartPage::Settings => "settings",
       }
    }
@@ -84,6 +87,7 @@ impl StartPage {
       match Page::from_setting(key) {
          Page::Browse => StartPage::Browse,
          Page::Games => StartPage::Games,
+         Page::Accounts => StartPage::Accounts,
          Page::Settings => StartPage::Settings,
          _ => StartPage::Instances,
       }
@@ -96,6 +100,7 @@ impl fmt::Display for StartPage {
          StartPage::Instances => t("nav-instances"),
          StartPage::Browse => t("nav-browse"),
          StartPage::Games => t("nav-games"),
+         StartPage::Accounts => t("nav-accounts"),
          StartPage::Settings => t("nav-settings"),
       })
    }
