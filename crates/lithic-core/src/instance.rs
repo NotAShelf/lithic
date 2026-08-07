@@ -14,6 +14,7 @@
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -21,10 +22,11 @@ use serde::{Deserialize, Serialize};
 use crate::Lithic;
 use crate::error::{Error, IoContext, Kind, Result};
 use crate::fsutil::{self, now_ms};
+use crate::paths::expand_home;
 
 pub const INSTANCE_FILE: &str = "instance.toml";
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Instance {
    /// Directory name under `instances/`. Not stored in the file.
    #[serde(skip)]
@@ -76,12 +78,14 @@ pub struct Stats {
 }
 
 impl Instance {
+   #[must_use]
    pub fn data_dir(&self) -> PathBuf {
       self.data_dir.clone().unwrap_or_else(|| self.dir.join("data"))
    }
 
    /// Where the game looks for this instance's mods and where lithic installs
    /// them.
+   #[must_use]
    pub fn mods_dir(&self) -> PathBuf {
       self
          .mods_dir
@@ -89,24 +93,29 @@ impl Instance {
          .unwrap_or_else(|| self.data_dir().join("Mods"))
    }
 
+   #[must_use]
    pub fn disabled_mods_dir(&self) -> PathBuf {
       self.dir.join("disabled-mods")
    }
 
+   #[must_use]
    pub fn lock_file(&self) -> PathBuf {
       self.dir.join("mods.json")
    }
 
+   #[must_use]
    pub fn logs_dir(&self) -> PathBuf {
       self.dir.join("logs")
    }
 
    /// Log directory the game itself writes to.
+   #[must_use]
    pub fn game_logs_dir(&self) -> PathBuf {
       self.data_dir().join("Logs")
    }
 
-   pub fn has_external_data(&self) -> bool {
+   #[must_use]
+   pub const fn has_external_data(&self) -> bool {
       self.data_dir.is_some()
    }
 
@@ -134,12 +143,14 @@ pub struct Listing {
 }
 
 impl Lithic {
+   /// # Errors
+   /// Returns an error if the instances directory or one of its entries cannot be read.
    pub fn list_instances(&self) -> Result<Listing> {
       let root = self.paths.instances_dir();
       let mut listing = Listing::default();
       let entries = match fs::read_dir(&root) {
          Ok(entries) => entries,
-         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(listing),
+         Err(e) if e.kind() == ErrorKind::NotFound => return Ok(listing),
          Err(e) => return Err(Error::io(&root, e)),
       };
       for entry in entries {
@@ -163,6 +174,9 @@ impl Lithic {
       Ok(listing)
    }
 
+   /// # Errors
+   /// Returns an error if the id is invalid, the instance is missing, or its file
+   /// cannot be read or parsed.
    pub fn instance(&self, id: &str) -> Result<Instance> {
       let dir = self.paths.instance_dir(id);
       if !valid_id(id) || !dir.join(INSTANCE_FILE).is_file() {
@@ -172,18 +186,26 @@ impl Lithic {
    }
 
    /// The instance named by `id`, or the active one when `id` is `None`.
+   ///
+   /// # Errors
+   /// Returns an error if no instance is selected, settings cannot be read, or
+   /// the selected instance cannot be loaded.
    pub fn resolve_instance(&self, id: Option<&str>) -> Result<Instance> {
       if let Some(id) = id {
          return self.instance(id);
       }
-      match self.settings()?.active_instance {
-         Some(active) => self.instance(&active),
-         None => Err(Error::invalid(
-            "no instance selected; pass one explicitly or select one first",
-         )),
-      }
+      self.settings()?.active_instance.map_or_else(
+         || {
+            Err(Error::invalid(
+               "no instance selected; pass one explicitly or select one first",
+            ))
+         },
+         |active| self.instance(&active),
+      )
    }
 
+   /// # Errors
+   /// Returns an error if settings or the active instance's file cannot be read or parsed.
    pub fn active_instance(&self) -> Result<Option<Instance>> {
       let Some(id) = self.settings()?.active_instance else {
          return Ok(None);
@@ -195,6 +217,8 @@ impl Lithic {
       }
    }
 
+   /// # Errors
+   /// Returns an error if the given instance cannot be loaded or settings cannot be saved.
    pub fn set_active_instance(&self, id: Option<&str>) -> Result<()> {
       if let Some(id) = id {
          self.instance(id)?;
@@ -202,6 +226,9 @@ impl Lithic {
       self.update_settings(|s| s.active_instance = id.map(ToString::to_string))
    }
 
+   /// # Errors
+   /// Returns an error for an empty name, an invalid or occupied id, shared data
+   /// directories, or a failure to create and save the instance.
    pub fn create_instance(&self, new: NewInstance) -> Result<Instance> {
       let name = new.name.trim().to_string();
       if name.is_empty() {
@@ -210,39 +237,36 @@ impl Lithic {
       let root = self.paths.instances_dir();
       fs::create_dir_all(&root).at(&root)?;
 
-      let id = match new.id {
-         Some(id) => {
-            if !valid_id(&id) {
-               return Err(Error::invalid(format!(
-                  "`{id}` is not a valid instance id; use lowercase letters, digits and dashes"
-               )));
-            }
-            if root.join(&id).exists() {
-               return Err(Error::AlreadyExists {
-                  kind: Kind::Instance,
-                  id,
-               });
-            }
-            id
+      let id = if let Some(id) = new.id {
+         if !valid_id(&id) {
+            return Err(Error::invalid(format!(
+               "`{id}` is not a valid instance id; use lowercase letters, digits and dashes"
+            )));
          }
-         None => {
-            let base = match fsutil::slugify(&name) {
-               s if s.is_empty() => "instance".to_string(),
-               s => s,
-            };
-            fsutil::unique_name(&base, |c| root.join(c).exists())
+         if root.join(&id).exists() {
+            return Err(Error::AlreadyExists {
+               kind: Kind::Instance,
+               id,
+            });
          }
+         id
+      } else {
+         let base = match fsutil::slugify(&name) {
+            s if s.is_empty() => "instance".to_string(),
+            s => s,
+         };
+         fsutil::unique_name(&base, |c| root.join(c).exists())
       };
 
-      let data_dir = new.data_dir.map(crate::paths::expand_home);
-      let mods_dir = new.mods_dir.map(crate::paths::expand_home);
+      let data_dir = new.data_dir.map(expand_home);
+      let mods_dir = new.mods_dir.map(expand_home);
       if let Some(dir) = &data_dir {
          self.ensure_data_dir_unshared(dir, None)?;
       }
 
       let dir = root.join(&id);
       let instance = Instance {
-         id: id.clone(),
+         id,
          dir: dir.clone(),
          name,
          game_version: new.game_version.filter(|v| !v.trim().is_empty()),
@@ -270,6 +294,10 @@ impl Lithic {
    }
 
    /// Applies `f` to the instance as it is on disk right now.
+   ///
+   /// # Errors
+   /// Returns errors from loading or locking the instance, from `f`, from an
+   /// empty name or shared data directory, or from saving the updated file.
    pub fn update_instance<R>(&self, id: &str, f: impl FnOnce(&mut Instance) -> Result<R>) -> Result<R> {
       let current = self.instance(id)?;
       let _lock = fsutil::FileLock::acquire(&current.file())?;
@@ -296,6 +324,10 @@ impl Lithic {
    /// Copies an instance: its settings and everything in its data directory
    /// except logs and caches. Saves are copied only when `with_saves` is set.
    /// The copy always gets its own data directory.
+   ///
+   /// # Errors
+   /// Returns an error if the source cannot be loaded, the destination cannot
+   /// be created, or its files and settings cannot be copied.
    pub fn clone_instance(&self, id: &str, name: &str, with_saves: bool) -> Result<Instance> {
       let source = self.instance(id)?;
       let mut copy = self.create_instance(NewInstance {
@@ -332,8 +364,8 @@ impl Lithic {
             fs::copy(source.lock_file(), copy.lock_file()).at(source.lock_file())?;
          }
          self.update_instance(&copy.id, |c| {
-            c.account = source.account.clone();
-            c.launch = source.launch.clone();
+            c.account.clone_from(&source.account);
+            c.launch.clone_from(&source.launch);
             Ok(())
          })
       })();
@@ -347,6 +379,10 @@ impl Lithic {
 
    /// Deletes an instance directory. A `data_dir` or `mods_dir` outside the
    /// instance is left alone.
+   ///
+   /// # Errors
+   /// Returns an error if the instance cannot be loaded or removed, or settings
+   /// cannot be updated after deletion.
    pub fn delete_instance(&self, id: &str) -> Result<()> {
       let instance = self.instance(id)?;
       fsutil::remove_path(&instance.dir)?;
@@ -357,7 +393,10 @@ impl Lithic {
       })
    }
 
-   /// Adds `elapsed_ms` of play time and stamps the last-played time.
+   /// Adds elapsed play time and stamps the last-played time.
+   ///
+   /// # Errors
+   /// Returns an error if the instance cannot be loaded, locked, or saved.
    pub fn record_play_session(&self, id: &str, started_ms: i64, ended_ms: i64) -> Result<()> {
       self.update_instance(id, |i| {
          i.stats.last_played_at = Some(ended_ms.max(started_ms));
@@ -392,6 +431,7 @@ fn load(id: &str, dir: &Path) -> Result<Instance> {
    Ok(instance)
 }
 
+#[must_use]
 pub fn valid_id(id: &str) -> bool {
    !id.is_empty()
       && id.len() <= 64
@@ -406,6 +446,10 @@ fn normalize(path: &Path) -> PathBuf {
 }
 
 #[cfg(test)]
+#[expect(
+   clippy::unwrap_used,
+   reason = "test setup and assertions intentionally fail on error"
+)]
 mod tests {
    use super::*;
    use crate::Paths;
