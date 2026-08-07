@@ -19,22 +19,18 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             asset_name: lithic-linux-x86_64
-            rustflags: ""
 
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             asset_name: lithic-windows-x86_64
-            rustflags: "-C link-args=/SUBSYSTEM:CONSOLE"
 
           - os: macos-latest
             target: x86_64-apple-darwin
             asset_name: lithic-macos-x86_64
-            rustflags: ""
 
           - os: macos-latest
             target: aarch64-apple-darwin
             asset_name: lithic-macos-arm64
-            rustflags: ""
 
     steps:
       - uses: actions/checkout@v4
@@ -49,29 +45,32 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y musl-tools musl-dev libxkbcommon-dev libgtk-3-dev libwayland-dev libxcb-shape0-dev libxcb-xfixes0-dev
+          sudo apt-get install -y musl-tools musl-dev libxkbcommon-dev libwayland-dev
 
       - name: Install system dependencies (macOS)
         if: runner.os == 'macOS'
         run: brew install pkg-config
 
-      - name: Build CLI
-        env:
-          RUSTFLAGS: ${{ matrix.rustflags }}
-        run: cargo build --release --target ${{ matrix.target }} --package lithic-cli
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }} --package lithic --package lithic-cli --package lithic-gui
 
-      - name: Build GUI
-        env:
-          RUSTFLAGS: ${{ matrix.rustflags }}
-        run: cargo build --release --target ${{ matrix.target }} --package lithic-gui
+      - name: Stage files
+        shell: bash
+        run: |
+          mkdir dist
+          ext="${{ runner.os == 'Windows' && '.exe' || '' }}"
+          for bin in lithic lithic-cli lithic-gui; do
+            cp "target/${{ matrix.target }}/release/${bin}${ext}" dist/
+          done
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            cp packages/lithic-cli/lithic.desktop dist/
+          fi
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset_name }}
-          path: |
-            target/${{ matrix.target }}/release/lithic-cli${{ runner.os == 'Windows' && '.exe' || '' }}
-            target/${{ matrix.target }}/release/lithic-gui${{ runner.os == 'Windows' && '.exe' || '' }}
+          path: dist/*
           if-no-files-found: error
 
   release:
@@ -85,21 +84,13 @@ jobs:
         with:
           path: release-artifacts
 
-      - name: Create platform-specific archives
+      - name: Create platform archives
         run: |
           mkdir -p archives
           cd release-artifacts
           for dir in */; do
             platform=$(basename "$dir")
-            cd "$dir"
-
-            if [[ "$platform" == *"windows"* ]]; then
-              zip -9 "../../archives/${platform}.zip" ./*
-            else
-              zip -9 "../../archives/${platform}.zip" ./*
-            fi
-
-            cd ..
+            (cd "$dir" && chmod +x lithic lithic-cli lithic-gui 2>/dev/null; zip -9 "../../archives/${platform}.zip" ./*)
           done
 
       - name: Create Release
