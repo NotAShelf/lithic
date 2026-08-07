@@ -1,10 +1,14 @@
 //! Starting the game for an instance and watching it until it exits.
 
+use std::cmp::Reverse;
 use std::fs;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{ErrorKind, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
+use tokio::process::Command;
 use tokio::sync::Notify;
 
 use crate::Lithic;
@@ -25,6 +29,7 @@ pub struct LaunchSpec {
 
 impl LaunchSpec {
    /// Shell-quoted launch command for display.
+   #[must_use]
    pub fn command_line(&self) -> String {
       let mut line = shell_words::quote(&self.program.to_string_lossy()).into_owned();
       for arg in &self.args {
@@ -69,6 +74,10 @@ pub struct Exit {
 
 impl Lithic {
    /// Builds the launch command without starting the game.
+   ///
+   /// # Errors
+   /// Returns an error if no game version is set, its install cannot be loaded,
+   /// or the install contains no game executable.
    pub fn launch_spec(&self, instance: &Instance) -> Result<LaunchSpec> {
       let version = instance
          .game_version
@@ -126,6 +135,11 @@ impl Lithic {
 
    /// Starts the game. Returns the session and a future that resolves when
    /// the game exits; drive the future to have play time recorded.
+   ///
+   /// # Errors
+   /// Returns an error if the launch command cannot be built, the mod directory
+   /// or output log cannot be created, account injection fails, or the process
+   /// cannot be started. The returned future reports errors waiting for the process.
    pub fn launch(
       &self,
       instance: &Instance,
@@ -145,18 +159,16 @@ impl Lithic {
       let out = fs::File::create(&log_path).at(&log_path)?;
       let err = out.try_clone().at(&log_path)?;
 
-      let mut cmd = tokio::process::Command::new(&spec.program);
+      let mut cmd = Command::new(&spec.program);
       cmd.args(&spec.args)
          .current_dir(&spec.cwd)
          .envs(spec.env.iter().map(|(k, v)| (k, v)))
-         .stdin(std::process::Stdio::null())
+         .stdin(Stdio::null())
          .stdout(out)
          .stderr(err)
          .kill_on_drop(false);
       let mut child = cmd.spawn().map_err(|e| match e.kind() {
-         std::io::ErrorKind::NotFound => {
-            Error::invalid(format!("cannot run {}: not found", spec.program.display()))
-         }
+         ErrorKind::NotFound => Error::invalid(format!("cannot run {}: not found", spec.program.display())),
          _ => Error::io(&spec.program, e),
       })?;
 
@@ -166,7 +178,7 @@ impl Lithic {
          pid: child.id(),
          started_ms,
          log_path: log_path.clone(),
-         stop: stop.clone(),
+         stop: Arc::clone(&stop),
       };
 
       let lithic = self.clone();
@@ -191,7 +203,7 @@ impl Lithic {
          let crash_report = fs::metadata(&crash)
             .and_then(|m| m.modified())
             .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
             .filter(|t| i64::try_from(t.as_millis()).unwrap_or(0) >= started_ms)
             .map(|_| crash);
          Ok(Exit {
@@ -209,8 +221,9 @@ impl Lithic {
 
    /// Log files for an instance, newest first: lithic's launch logs and the
    /// game's own logs.
+   #[must_use]
    pub fn log_files(&self, instance: &Instance) -> Vec<PathBuf> {
-      let mut files: Vec<(std::time::SystemTime, PathBuf)> = [instance.logs_dir(), instance.game_logs_dir()]
+      let mut files: Vec<(SystemTime, PathBuf)> = [instance.logs_dir(), instance.game_logs_dir()]
          .iter()
          .filter_map(|dir| fs::read_dir(dir).ok())
          .flatten()
@@ -222,12 +235,15 @@ impl Lithic {
          })
          .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
          .collect();
-      files.sort_by_key(|f| std::cmp::Reverse(f.0));
+      files.sort_by_key(|f| Reverse(f.0));
       files.into_iter().map(|(_, p)| p).collect()
    }
 }
 
 /// Reads at most the last `max_bytes` of a file as text.
+///
+/// # Errors
+/// Returns an error if the file cannot be opened, inspected, sought, or read.
 pub fn read_tail(path: &Path, max_bytes: u64) -> Result<String> {
    let mut file = fs::File::open(path).at(path)?;
    let len = file.metadata().at(path)?.len();
@@ -245,6 +261,7 @@ pub fn read_tail(path: &Path, max_bytes: u64) -> Result<String> {
 }
 
 /// The last `lines` non-empty lines of a file.
+#[must_use]
 pub fn tail(path: &Path, lines: usize) -> Vec<String> {
    let Ok(text) = read_tail(path, 16 * 1024) else {
       return Vec::new();
@@ -277,13 +294,24 @@ fn prune_logs(dir: &Path) {
 }
 
 #[cfg(test)]
+#[expect(
+   clippy::unwrap_used,
+   reason = "test setup and assertions intentionally fail on error"
+)]
 mod tests {
+   #[cfg(unix)]
+   use std::time::Duration;
+
+   #[cfg(unix)]
+   use tokio::time::timeout;
+
    use super::*;
+   use crate::Paths;
    use crate::instance::NewInstance;
 
    fn setup() -> (tempfile::TempDir, Lithic, Instance) {
       let d = tempfile::tempdir().unwrap();
-      let l = Lithic::new(crate::Paths::rooted(d.path())).unwrap();
+      let l = Lithic::new(Paths::rooted(d.path())).unwrap();
       let game = d.path().join("game-1.21.5");
       fs::create_dir_all(&game).unwrap();
       let exe = if cfg!(windows) {
@@ -406,7 +434,7 @@ mod tests {
       let (session, waiter) = l.launch(&i).unwrap();
       let handle = tokio::spawn(waiter);
       session.stop();
-      let exit = tokio::time::timeout(std::time::Duration::from_secs(10), handle)
+      let exit = timeout(Duration::from_secs(10), handle)
          .await
          .unwrap()
          .unwrap()
