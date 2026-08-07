@@ -7,6 +7,7 @@ pub mod game;
 pub mod http;
 pub mod instance;
 pub mod launch;
+pub mod migrate;
 pub mod moddb;
 pub mod modinfo;
 pub mod mods;

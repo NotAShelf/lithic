@@ -55,6 +55,13 @@ impl Paths {
       self.config.join("sessions")
    }
 
+   /// The pre-2.0 single-file configuration.
+   #[must_use]
+   pub fn legacy_config_file(&self) -> PathBuf {
+      self.config.join("config.toml")
+   }
+
+   #[must_use]
    pub fn instances_dir(&self) -> PathBuf {
       self.data.join("instances")
    }
