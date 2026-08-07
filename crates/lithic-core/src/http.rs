@@ -1,8 +1,12 @@
+use std::fs::File;
 use std::path::Path;
 use std::time::Duration;
 
 use md5::{Digest, Md5};
+use reqwest::header::CONTENT_TYPE;
+use tokio::fs;
 use tokio::io::AsyncWriteExt;
+use tokio::time::sleep;
 
 use crate::error::{Error, IoContext, Result};
 use crate::progress::{Cancel, Event, Reporter};
@@ -35,6 +39,10 @@ pub struct Download<'a> {
 }
 
 impl Http {
+   /// Creates the shared API and download clients.
+   ///
+   /// # Errors
+   /// Returns an error if TLS or HTTP client initialization fails.
    pub fn new() -> Result<Self> {
       let build = |b: reqwest::ClientBuilder| {
          b.user_agent(USER_AGENT)
@@ -44,10 +52,14 @@ impl Http {
       };
       Ok(Self {
          api: build(reqwest::Client::builder().timeout(Duration::from_secs(30)))?,
-         download: build(reqwest::Client::builder().read_timeout(Duration::from_secs(60)))?,
+         download: build(reqwest::Client::builder().read_timeout(Duration::from_mins(1)))?,
       })
    }
 
+   /// Gets a UTF-8 response body, retrying transient failures.
+   ///
+   /// # Errors
+   /// Returns an error if the request, response status, or body read fails.
    pub async fn get_text(&self, url: &str) -> Result<String> {
       retry(|| async {
          let response = self
@@ -64,6 +76,9 @@ impl Http {
 
    /// POSTs an `application/x-www-form-urlencoded` body once, without
    /// retrying, and returns the status and body whatever the status is.
+   ///
+   /// # Errors
+   /// Returns an error if sending the request or reading its response fails.
    pub async fn post_form(&self, url: &str, pairs: &[(&str, &str)]) -> Result<(u16, String)> {
       let body = pairs
          .iter()
@@ -73,7 +88,7 @@ impl Http {
       let response = self
          .api
          .post(url)
-         .header(reqwest::header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+         .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
          .body(body)
          .send()
          .await
@@ -83,6 +98,10 @@ impl Http {
       Ok((status, text))
    }
 
+   /// Gets a response body as bytes, retrying transient failures.
+   ///
+   /// # Errors
+   /// Returns an error if the request, response status, or body read fails.
    pub async fn get_bytes(&self, url: &str) -> Result<Vec<u8>> {
       retry(|| async {
          let response = self
@@ -100,19 +119,23 @@ impl Http {
    /// Streams `url` into `dest`. The body goes to `dest.part` first and is
    /// renamed into place only once it is complete and, when `md5` is given,
    /// matches it. Returns the number of bytes written.
+   ///
+   /// # Errors
+   /// Returns an error if the request, file write or rename, or checksum
+   /// verification fails, or the operation is cancelled.
    pub async fn download(&self, url: &str, dest: &Path, opts: Download<'_>) -> Result<u64> {
       let mut part_name = dest.file_name().unwrap_or_default().to_os_string();
       part_name.push(".part");
       let part = dest.with_file_name(part_name);
       if let Some(parent) = dest.parent() {
-         tokio::fs::create_dir_all(parent).await.at(parent)?;
+         fs::create_dir_all(parent).await.at(parent)?;
       }
 
       let result = retry(|| self.download_once(url, &part, &opts)).await;
       let (size, digest) = match result {
          Ok(v) => v,
          Err(e) => {
-            let _ = tokio::fs::remove_file(&part).await;
+            let _ = fs::remove_file(&part).await;
             return Err(e);
          }
       };
@@ -120,7 +143,7 @@ impl Http {
       if let Some(expected) = opts.md5
          && !expected.eq_ignore_ascii_case(&digest)
       {
-         let _ = tokio::fs::remove_file(&part).await;
+         let _ = fs::remove_file(&part).await;
          return Err(Error::Checksum {
             file: opts.label.to_string(),
             expected: expected.to_ascii_lowercase(),
@@ -128,7 +151,7 @@ impl Http {
          });
       }
 
-      tokio::fs::rename(&part, dest).await.at(dest)?;
+      fs::rename(&part, dest).await.at(dest)?;
       Ok(size)
    }
 
@@ -143,7 +166,7 @@ impl Http {
          .map_err(|e| Error::http(url, e))?;
       let total = response.content_length();
 
-      let mut file = tokio::fs::File::create(part).await.at(part)?;
+      let mut file = fs::File::create(part).await.at(part)?;
       let mut hasher = Md5::new();
       let mut done = 0u64;
       opts.reporter.emit(Event::Transfer {
@@ -190,7 +213,7 @@ where
          Ok(v) => return Ok(v),
          Err(e) if attempt < ATTEMPTS && e.is_transient() => {
             tracing::warn!("attempt {attempt} failed, retrying: {e}");
-            tokio::time::sleep(Duration::from_millis(500 * 2u64.pow(attempt))).await;
+            sleep(Duration::from_millis(500 * 2u64.pow(attempt))).await;
             attempt += 1;
          }
          Err(e) => return Err(e),
@@ -199,26 +222,42 @@ where
 }
 
 /// Percent-encodes for query strings and form bodies (space becomes `+`).
+#[must_use]
 pub fn form_encode(s: &str) -> String {
    let mut out = String::with_capacity(s.len());
    for b in s.bytes() {
       match b {
          b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
          b' ' => out.push('+'),
-         _ => out.push_str(&format!("%{b:02X}")),
+         _ => {
+            const DIGITS: &[u8; 16] = b"0123456789ABCDEF";
+            out.push('%');
+            out.push(char::from(DIGITS[usize::from(b >> 4)]));
+            out.push(char::from(DIGITS[usize::from(b & 0x0f)]));
+         }
       }
    }
    out
 }
 
+#[must_use]
 pub fn hex(bytes: &[u8]) -> String {
-   bytes.iter().map(|b| format!("{b:02x}")).collect()
+   const DIGITS: &[u8; 16] = b"0123456789abcdef";
+   let mut out = String::with_capacity(bytes.len() * 2);
+   for &b in bytes {
+      out.push(char::from(DIGITS[usize::from(b >> 4)]));
+      out.push(char::from(DIGITS[usize::from(b & 0x0f)]));
+   }
+   out
 }
 
 /// md5 of a file on disk, as lowercase hex.
+///
+/// # Errors
+/// Returns an I/O error if the file cannot be opened or read.
 pub fn md5_file(path: &Path) -> Result<String> {
    use std::io::Read;
-   let mut file = std::fs::File::open(path).at(path)?;
+   let mut file = File::open(path).at(path)?;
    let mut hasher = Md5::new();
    let mut buf = vec![0u8; 1 << 16];
    loop {
