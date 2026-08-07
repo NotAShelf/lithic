@@ -1,3 +1,5 @@
+use std::env;
+
 use comfy_table::Cell;
 use lithic_core::fsutil;
 use lithic_core::mods::InstallOptions;
@@ -5,8 +7,9 @@ use lithic_core::pack::ExportOptions;
 
 use crate::Ctx;
 use crate::args::PackCommand;
-use crate::ui::Result;
+use crate::ui::{Result, Ui};
 
+#[expect(clippy::print_stdout, reason = "pack metadata is CLI output")]
 pub async fn run(ctx: &Ctx, cmd: PackCommand) -> Result {
    match cmd {
       PackCommand::Export {
@@ -22,7 +25,7 @@ pub async fn run(ctx: &Ctx, cmd: PackCommand) -> Result {
                s if s.is_empty() => instance.id.clone(),
                s => s,
             };
-            std::env::current_dir()
+            env::current_dir()
                .unwrap_or_default()
                .join(format!("{name}.lithicpack.zip"))
          });
@@ -83,7 +86,7 @@ pub async fn run(ctx: &Ctx, cmd: PackCommand) -> Result {
       PackCommand::Show { file } => {
          let manifest = ctx.lithic.read_pack(&file)?;
          if ctx.ui.json {
-            return ctx.ui.print_json(&manifest);
+            return Ui::print_json(&manifest);
          }
          println!("{}", manifest.name);
          if let Some(d) = &manifest.description {
@@ -107,7 +110,7 @@ pub async fn run(ctx: &Ctx, cmd: PackCommand) -> Result {
                Cell::new(if m.enabled { "yes" } else { "no" }),
             ]);
          }
-         ctx.ui.print_table(&table);
+         Ui::print_table(&table);
          Ok(())
       }
    }
