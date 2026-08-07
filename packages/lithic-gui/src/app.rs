@@ -11,7 +11,7 @@ use lithic_core::{Cancel, Event, Freshness, Instance, Lithic, Reporter, Settings
 
 use crate::i18n::{t, t1, t2};
 use crate::notify::{self, Notifications};
-use crate::screen::{game, instance, instances, settings};
+use crate::screen::{browse, game, instance, instances, settings};
 use crate::task::blocking;
 use crate::{style, widget};
 
@@ -19,6 +19,7 @@ use crate::{style, widget};
 pub enum Page {
    Instances,
    Instance(String),
+   Browse,
    Games,
    Settings,
 }
@@ -26,6 +27,7 @@ pub enum Page {
 impl Page {
    pub fn from_setting(value: &str) -> Self {
       match value {
+         "browse" => Page::Browse,
          "games" | "game_versions" => Page::Games,
          "settings" => Page::Settings,
          _ => Page::Instances,
@@ -143,6 +145,17 @@ impl Shared {
       self.running.contains_key(id) || self.launching.contains(id)
    }
 
+   /// The instance mods go into unless the user picks another: the selected
+   /// one, else the first.
+   pub fn default_instance(&self) -> Option<&Instance> {
+      self
+         .settings
+         .active_instance
+         .as_deref()
+         .and_then(|id| self.instance(id))
+         .or_else(|| self.instances.first())
+   }
+
    /// Starts a background operation that reports progress into `busy[key]`
    /// and ends with [`Message::OpDone`]. Refuses while `key` is busy.
    pub fn start_op<F, Fut>(&mut self, key: String, kind: OpKind, work: F) -> Task<Message>
@@ -236,6 +249,8 @@ enum Dialog {
 #[derive(Debug, Clone)]
 pub enum Message {
    Navigate(Page),
+   /// Opens Browse with mods going into this instance.
+   BrowseFor(String),
    Reload,
    Loaded(Result<Box<Snapshot>, String>),
    ReloadManifest,
@@ -261,6 +276,7 @@ pub enum Message {
 
    Instances(instances::Message),
    Instance(instance::Message),
+   Browse(browse::Message),
    Games(game::Message),
    Settings(settings::Message),
 }
@@ -275,6 +291,7 @@ pub struct App {
    theme: Option<Theme>,
    instances: instances::State,
    instance: Option<instance::State>,
+   browse: browse::State,
    games: game::State,
    settings: settings::State,
 }
@@ -290,6 +307,7 @@ impl App {
          theme: None,
          instances: instances::State::default(),
          instance: None,
+         browse: browse::State::default(),
          games: game::State::default(),
          settings: settings::State,
          shared,
@@ -326,6 +344,7 @@ impl App {
    /// Work to do when a page is shown.
    fn enter(&self, page: &Page) -> Task<Message> {
       match page {
+         Page::Browse => browse::enter(&self.browse, &self.shared),
          Page::Instance(id) => instance::load_mods(&self.shared, id),
          _ => Task::none(),
       }
@@ -343,6 +362,11 @@ impl App {
             self.page = page;
             task
          }
+         Message::BrowseFor(id) => {
+            self.browse.set_target(Some(id), &self.shared);
+            self.page = Page::Browse;
+            browse::enter(&self.browse, &self.shared)
+         }
          Message::Reload => {
             let lithic = self.shared.lithic.clone();
             Task::perform(
@@ -358,11 +382,16 @@ impl App {
             self.shared.mod_counts = s.mod_counts;
             self.shared.installs = s.installs;
             self.refresh_theme();
+            let first_load = !self.shared.loaded;
             self.shared.loaded = true;
             if let Page::Instance(id) = &self.page
                && self.shared.instance(id).is_none()
             {
                self.page = Page::Instances;
+            }
+            self.browse.sync_target(&self.shared);
+            if first_load && self.page == Page::Browse {
+               return browse::enter(&self.browse, &self.shared);
             }
             Task::none()
          }
@@ -517,6 +546,7 @@ impl App {
             Some(state) => state.update(m, &mut self.shared),
             None => Task::none(),
          },
+         Message::Browse(m) => self.browse.update(m, &mut self.shared),
          Message::Games(m) => self.games.update(m, &mut self.shared),
          Message::Settings(m) => {
             let task = self.settings.update(m, &mut self.shared);
@@ -585,6 +615,9 @@ impl App {
       {
          tasks.push(state.after_op(&self.shared));
       }
+      if self.page == Page::Browse {
+         tasks.push(browse::refresh_installed(&self.browse, &self.shared));
+      }
       Task::batch(tasks)
    }
 
@@ -636,6 +669,7 @@ impl App {
             Some(state) => state.view(&self.shared).map(Message::Instance),
             None => widget::loading(t("loading")),
          },
+         Page::Browse => self.browse.view(&self.shared).map(Message::Browse),
          Page::Games => self.games.view(&self.shared).map(Message::Games),
          Page::Settings => self.settings.view(&self.shared).map(Message::Settings),
       };
@@ -695,6 +729,7 @@ impl App {
          text("lithic").size(22).font(widget::bold()),
          space().height(12),
          item(t("nav-instances"), Page::Instances),
+         item(t("nav-browse"), Page::Browse),
          item(t("nav-games"), Page::Games),
          item(t("nav-settings"), Page::Settings),
          space::vertical(),
