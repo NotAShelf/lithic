@@ -79,6 +79,12 @@ in
       src = buildSrc;
       useNextest = true;
 
+      postInstall = ''
+        install -Dm644 packages/lithic-cli/lithic.desktop $out/share/applications/lithic.desktop
+        substituteInPlace $out/share/applications/lithic.desktop \
+          --replace-fail "Exec=lithic %u" "Exec=$out/bin/lithic %u"
+      '';
+
       postFixup = ''
         for bin in $out/bin/*; do
           wrapProgram "$bin" \
