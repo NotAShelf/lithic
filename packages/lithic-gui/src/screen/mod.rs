@@ -26,6 +26,10 @@ pub fn format_duration(ms: i64) -> String {
    }
 }
 
+#[expect(
+   clippy::cast_precision_loss,
+   reason = "abbreviated counts deliberately round to one decimal place"
+)]
 pub fn format_count(n: i64) -> String {
    match n {
       n if n >= 1_000_000 => format!("{:.1}M", n as f64 / 1_000_000.0),

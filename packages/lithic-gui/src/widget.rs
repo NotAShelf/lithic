@@ -6,7 +6,7 @@ use iced::{Center, Element, Fill, Font, font};
 use crate::i18n::t;
 use crate::style::{self, Tone};
 
-pub fn bold() -> Font {
+pub const fn bold() -> Font {
    Font {
       weight: font::Weight::Bold,
       ..Font::DEFAULT
