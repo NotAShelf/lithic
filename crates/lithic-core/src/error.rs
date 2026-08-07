@@ -1,7 +1,11 @@
 use std::fmt;
+use std::io;
 use std::path::{Path, PathBuf};
+use std::result;
 
-pub type Result<T, E = Error> = std::result::Result<T, E>;
+use crate::auth::AuthError;
+
+pub type Result<T, E = Error> = result::Result<T, E>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -15,11 +19,11 @@ pub enum Kind {
 impl fmt::Display for Kind {
    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
       f.write_str(match self {
-         Kind::Instance => "instance",
-         Kind::GameVersion => "game version",
-         Kind::Mod => "mod",
-         Kind::Release => "release",
-         Kind::Account => "account",
+         Self::Instance => "instance",
+         Self::GameVersion => "game version",
+         Self::Mod => "mod",
+         Self::Release => "release",
+         Self::Account => "account",
       })
    }
 }
@@ -30,7 +34,7 @@ pub enum Error {
    Io {
       path: PathBuf,
       #[source]
-      source: std::io::Error,
+      source: io::Error,
    },
 
    #[error("request to {url} failed: {source}")]
@@ -84,44 +88,45 @@ pub enum Error {
    Running(String),
 
    #[error(transparent)]
-   Auth(#[from] crate::auth::AuthError),
+   Auth(#[from] AuthError),
 }
 
 impl Error {
-   pub fn io(path: impl Into<PathBuf>, source: std::io::Error) -> Self {
-      Error::Io {
+   pub fn io(path: impl Into<PathBuf>, source: io::Error) -> Self {
+      Self::Io {
          path: path.into(),
          source,
       }
    }
 
    pub fn http(url: impl Into<String>, source: reqwest::Error) -> Self {
-      Error::Http {
+      Self::Http {
          url: url.into(),
          source,
       }
    }
 
    pub fn parse(what: impl Into<String>, message: impl fmt::Display) -> Self {
-      Error::Parse {
+      Self::Parse {
          what: what.into(),
          message: message.to_string(),
       }
    }
 
    pub fn not_found(kind: Kind, id: impl Into<String>) -> Self {
-      Error::NotFound { kind, id: id.into() }
+      Self::NotFound { kind, id: id.into() }
    }
 
    pub fn invalid(message: impl Into<String>) -> Self {
-      Error::Invalid(message.into())
+      Self::Invalid(message.into())
    }
 
    /// True for failures that retrying later could fix: timeouts, dropped
    /// connections, 5xx answers.
+   #[must_use]
    pub fn is_transient(&self) -> bool {
       match self {
-         Error::Http { source, .. } => {
+         Self::Http { source, .. } => {
             source.is_timeout()
                || source.is_connect()
                || source.is_request()
@@ -134,10 +139,12 @@ impl Error {
 
 /// Attaches the offending path to `std::io::Error`s.
 pub trait IoContext<T> {
+   /// # Errors
+   /// Returns [`Error::Io`] with the supplied path when the I/O operation fails.
    fn at(self, path: impl AsRef<Path>) -> Result<T>;
 }
 
-impl<T> IoContext<T> for std::io::Result<T> {
+impl<T> IoContext<T> for io::Result<T> {
    fn at(self, path: impl AsRef<Path>) -> Result<T> {
       self.map_err(|e| Error::io(path.as_ref(), e))
    }

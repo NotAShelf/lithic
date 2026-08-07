@@ -1,6 +1,8 @@
+use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
+use std::process;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
@@ -9,15 +11,18 @@ use serde::de::DeserializeOwned;
 use crate::error::{Error, IoContext, Result};
 
 /// Milliseconds since the Unix epoch.
+#[must_use]
 pub fn now_ms() -> i64 {
    SystemTime::now()
       .duration_since(UNIX_EPOCH)
-      .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
-      .unwrap_or(0)
+      .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
 /// Writes `bytes` to a sibling temp file and renames it over `path`, so readers
 /// never see a half-written file.
+///
+/// # Errors
+/// Returns an I/O error if the temp file cannot be written or renamed.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
    write_atomic_with_mode(path, bytes, None)
 }
@@ -25,12 +30,16 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
 /// Like [`write_atomic`], but the file is created with `mode` on Unix. The
 /// mode is applied at creation, so the contents are never readable by others,
 /// not even briefly.
+///
+/// # Errors
+/// Returns an I/O error if the directory or temp file cannot be created,
+/// written, synced, or renamed.
 pub fn write_atomic_with_mode(path: &Path, bytes: &[u8], mode: Option<u32>) -> Result<()> {
    let parent = path.parent().unwrap_or_else(|| Path::new("."));
    fs::create_dir_all(parent).at(parent)?;
 
    let mut tmp_name = path.file_name().unwrap_or_default().to_os_string();
-   tmp_name.push(format!(".{}.tmp", std::process::id()));
+   tmp_name.push(format!(".{}.tmp", process::id()));
    let tmp = parent.join(tmp_name);
 
    let mut options = OpenOptions::new();
@@ -57,10 +66,14 @@ pub fn write_atomic_with_mode(path: &Path, bytes: &[u8], mode: Option<u32>) -> R
 
 /// Reads a TOML file. A missing file is `Ok(None)`; a file that exists but
 /// does not parse is [`Error::Corrupt`] and is never overwritten by callers.
+///
+/// # Errors
+/// Returns an I/O error if the file cannot be read, or [`Error::Corrupt`]
+/// if the existing TOML cannot be parsed.
 pub fn read_toml<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
    let text = match fs::read_to_string(path) {
       Ok(text) => text,
-      Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+      Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
       Err(e) => return Err(Error::io(path, e)),
    };
    toml::from_str(&text).map(Some).map_err(|e| Error::Corrupt {
@@ -69,15 +82,24 @@ pub fn read_toml<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
    })
 }
 
+/// Writes a value as TOML, replacing the file atomically.
+///
+/// # Errors
+/// Returns an error if serialization or writing fails.
 pub fn write_toml<T: Serialize>(path: &Path, value: &T) -> Result<()> {
    let text = toml::to_string_pretty(value).map_err(|e| Error::parse(path.display().to_string(), e))?;
    write_atomic(path, text.as_bytes())
 }
 
+/// Reads a JSON file, returning `None` if it does not exist.
+///
+/// # Errors
+/// Returns an I/O error if the file cannot be read, or [`Error::Corrupt`]
+/// if the existing JSON cannot be parsed.
 pub fn read_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
    let bytes = match fs::read(path) {
       Ok(bytes) => bytes,
-      Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+      Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
       Err(e) => return Err(Error::io(path, e)),
    };
    serde_json::from_slice(&bytes)
@@ -88,6 +110,10 @@ pub fn read_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
       })
 }
 
+/// Writes a value as JSON, replacing the file atomically.
+///
+/// # Errors
+/// Returns an error if serialization or writing fails.
 pub fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
    let bytes = serde_json::to_vec_pretty(value).map_err(|e| Error::parse(path.display().to_string(), e))?;
    write_atomic(path, &bytes)
@@ -101,6 +127,8 @@ pub struct FileLock {
 }
 
 impl FileLock {
+   /// # Errors
+   /// Returns an I/O error if the lock file cannot be created or locked.
    pub fn acquire(path: &Path) -> Result<Self> {
       let lock_path = Self::path_for(path);
       if let Some(parent) = lock_path.parent() {
@@ -117,8 +145,9 @@ impl FileLock {
    }
 
    /// `.<name>.lock` next to `path`.
+   #[must_use]
    pub fn path_for(path: &Path) -> PathBuf {
-      let mut name = std::ffi::OsString::from(".");
+      let mut name = OsString::from(".");
       name.push(path.file_name().unwrap_or_default());
       name.push(".lock");
       path.with_file_name(name)
@@ -127,6 +156,10 @@ impl FileLock {
 
 /// Re-reads `path`, applies `f`, and writes the result back, all while holding
 /// the file's lock. A missing file starts from `T::default()`.
+///
+/// # Errors
+/// Returns an error if acquiring the lock, reading or writing the file, or
+/// applying `f` fails. Invalid existing TOML is left untouched.
 pub fn update_toml<T, R>(path: &Path, f: impl FnOnce(&mut T) -> Result<R>) -> Result<R>
 where
    T: DeserializeOwned + Serialize + Default,
@@ -139,6 +172,10 @@ where
 }
 
 /// [`update_toml`] for JSON files.
+///
+/// # Errors
+/// Returns an error if acquiring the lock, reading or writing the file, or
+/// applying `f` fails. Invalid existing JSON is left untouched.
 pub fn update_json<T, R>(path: &Path, f: impl FnOnce(&mut T) -> Result<R>) -> Result<R>
 where
    T: DeserializeOwned + Serialize + Default,
@@ -153,6 +190,10 @@ where
 /// Recursively copies `from` into `to`. Entries for which `skip` returns true
 /// (given the path relative to `from`) are left out. Symlinks are copied as
 /// the files they point to.
+///
+/// # Errors
+/// Returns an I/O error if a directory cannot be created or an entry cannot
+/// be read or copied.
 pub fn copy_dir(from: &Path, to: &Path, skip: &dyn Fn(&Path) -> bool) -> Result<()> {
    fn walk(root: &Path, dir: &Path, to: &Path, skip: &dyn Fn(&Path) -> bool) -> Result<()> {
       fs::create_dir_all(to).at(to)?;
@@ -176,10 +217,13 @@ pub fn copy_dir(from: &Path, to: &Path, skip: &dyn Fn(&Path) -> bool) -> Result<
 }
 
 /// Removes a file, directory tree, or symlink. Missing paths are fine.
+///
+/// # Errors
+/// Returns an I/O error if the path cannot be inspected or removed.
 pub fn remove_path(path: &Path) -> Result<()> {
    let meta = match fs::symlink_metadata(path) {
       Ok(meta) => meta,
-      Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+      Err(e) if e.kind() == ErrorKind::NotFound => return Ok(()),
       Err(e) => return Err(Error::io(path, e)),
    };
    if meta.is_dir() {
@@ -189,8 +233,12 @@ pub fn remove_path(path: &Path) -> Result<()> {
    }
 }
 
-/// Moves `from` to `to`, falling back to copy and delete when they are on
-/// different filesystems.
+/// Moves `from` to `to`. Copies and removes the source only when the paths
+/// are on different filesystems; other rename failures leave it untouched.
+///
+/// # Errors
+/// Returns an I/O error if the destination cannot be created, or if renaming,
+/// copying across filesystems, or removing the source fails.
 pub fn move_path(from: &Path, to: &Path) -> Result<()> {
    if let Some(parent) = to.parent() {
       fs::create_dir_all(parent).at(parent)?;
@@ -205,6 +253,7 @@ pub fn move_path(from: &Path, to: &Path) -> Result<()> {
          fs::copy(from, to).at(from)?;
          remove_path(from)
       }
+      Err(e) => Err(Error::io(to, e)),
    }
 }
 
@@ -230,6 +279,7 @@ pub fn slugify(text: &str) -> String {
 
 /// Strips anything from a server-provided file name that could escape the
 /// target directory or upset Windows.
+#[must_use]
 pub fn sanitize_file_name(name: &str) -> String {
    let base = name.rsplit(['/', '\\']).next().unwrap_or(name);
    let cleaned: String = base
@@ -253,12 +303,16 @@ pub fn unique_name(base: &str, taken: impl Fn(&str) -> bool) -> String {
    if !taken(base) {
       return base.to_string();
    }
-   (2..)
-      .map(|n| format!("{base}-{n}"))
-      .find(|candidate| !taken(candidate))
-      .unwrap_or_else(|| base.to_string())
+   for n in 2..=u64::MAX {
+      let candidate = format!("{base}-{n}");
+      if !taken(&candidate) {
+         return candidate;
+      }
+   }
+   base.to_string()
 }
 
+#[must_use]
 pub fn file_name_string(path: &Path) -> String {
    path
       .file_name()
@@ -267,6 +321,7 @@ pub fn file_name_string(path: &Path) -> String {
 }
 
 /// Returns `path` if it is absolute, otherwise `base/path`.
+#[must_use]
 pub fn absolutize(base: &Path, path: &Path) -> PathBuf {
    if path.is_absolute() {
       path.to_path_buf()
@@ -276,6 +331,10 @@ pub fn absolutize(base: &Path, path: &Path) -> PathBuf {
 }
 
 #[cfg(test)]
+#[expect(
+   clippy::unwrap_used,
+   reason = "test setup and assertions intentionally fail on error"
+)]
 mod tests {
    use super::*;
 
