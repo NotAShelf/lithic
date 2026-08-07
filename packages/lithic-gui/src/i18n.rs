@@ -20,8 +20,12 @@ pub fn tn(id: &str, args: &[(&str, Value<'_>)]) -> String {
 }
 
 #[cfg(test)]
+#[expect(
+   clippy::unwrap_used,
+   reason = "test setup and assertions intentionally fail on error"
+)]
 mod tests {
-   use std::path::Path;
+   use std::{fs, path::Path};
 
    /// Collects the string literal that starts each `t(`, `t1(`, `t2(` or
    /// `tn(` call, even when rustfmt put it on the next line.
@@ -47,15 +51,12 @@ mod tests {
    }
 
    fn sources(dir: &Path, out: &mut Vec<(String, String)>) {
-      for entry in std::fs::read_dir(dir).unwrap().flatten() {
+      for entry in fs::read_dir(dir).unwrap().flatten() {
          let path = entry.path();
          if path.is_dir() {
             sources(&path, out);
          } else if path.extension().is_some_and(|e| e == "rs") && !path.ends_with("i18n.rs") {
-            out.push((
-               path.display().to_string(),
-               std::fs::read_to_string(&path).unwrap(),
-            ));
+            out.push((path.display().to_string(), fs::read_to_string(&path).unwrap()));
          }
       }
    }
