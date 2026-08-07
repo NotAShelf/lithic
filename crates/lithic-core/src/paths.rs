@@ -1,3 +1,4 @@
+use std::env;
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
@@ -16,9 +17,11 @@ pub struct Paths {
 }
 
 impl Paths {
+   /// # Errors
+   /// Returns an error when a root has no configured override or system default.
    pub fn from_env() -> Result<Self> {
       let pick = |var: &str, base: Option<PathBuf>| -> Result<PathBuf> {
-         if let Some(dir) = std::env::var_os(var).filter(|v| !v.is_empty()) {
+         if let Some(dir) = env::var_os(var).filter(|v| !v.is_empty()) {
             return Ok(PathBuf::from(dir));
          }
          base
@@ -43,14 +46,17 @@ impl Paths {
       }
    }
 
+   #[must_use]
    pub fn settings_file(&self) -> PathBuf {
       self.config.join("settings.toml")
    }
 
+   #[must_use]
    pub fn accounts_file(&self) -> PathBuf {
       self.config.join("accounts.toml")
    }
 
+   #[must_use]
    pub fn sessions_dir(&self) -> PathBuf {
       self.config.join("sessions")
    }
@@ -66,34 +72,42 @@ impl Paths {
       self.data.join("instances")
    }
 
+   #[must_use]
    pub fn instance_dir(&self, id: &str) -> PathBuf {
       self.instances_dir().join(id)
    }
 
+   #[must_use]
    pub fn game_dir(&self) -> PathBuf {
       self.data.join("game")
    }
 
+   #[must_use]
    pub fn game_registry_file(&self) -> PathBuf {
       self.game_dir().join("installs.toml")
    }
 
+   #[must_use]
    pub fn backups_dir(&self) -> PathBuf {
       self.data.join("backups")
    }
 
+   #[must_use]
    pub fn exports_dir(&self) -> PathBuf {
       self.data.join("exports")
    }
 
+   #[must_use]
    pub fn downloads_dir(&self) -> PathBuf {
       self.cache.join("downloads")
    }
 
+   #[must_use]
    pub fn mod_index_file(&self) -> PathBuf {
       self.cache.join("mod-index.json")
    }
 
+   #[must_use]
    pub fn game_manifest_file(&self) -> PathBuf {
       self.cache.join("game-manifest.json")
    }
@@ -105,14 +119,12 @@ pub fn expand_home(path: impl AsRef<Path>) -> PathBuf {
    let Ok(rest) = path.strip_prefix("~") else {
       return path.to_path_buf();
    };
-   match dirs::home_dir() {
-      Some(home) => home.join(rest),
-      None => path.to_path_buf(),
-   }
+   dirs::home_dir().map_or_else(|| path.to_path_buf(), |home| home.join(rest))
 }
 
 /// Data directories the stock game launcher uses, in the order they are
 /// checked. Only existing directories are returned.
+#[must_use]
 pub fn stock_game_data_dirs() -> Vec<PathBuf> {
    let mut candidates = Vec::new();
    if let Some(config) = dirs::config_dir() {
@@ -139,6 +151,10 @@ pub fn stock_game_data_dirs() -> Vec<PathBuf> {
 }
 
 #[cfg(test)]
+#[expect(
+   clippy::unwrap_used,
+   reason = "test setup and assertions intentionally fail on error"
+)]
 mod tests {
    use super::*;
 
