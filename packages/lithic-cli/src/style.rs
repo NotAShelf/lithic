@@ -1,6 +1,6 @@
 //! Table colours, configured under `[cli.table]` in settings.toml.
 //!
-//! The table layout is configured through CLI settings:
+//! The layout is the one lithic 1.x used, so migrated settings keep working:
 //!
 //! ```toml
 //! [cli.table.list.headers]
@@ -13,6 +13,7 @@
 
 use clap::ValueEnum;
 use comfy_table::{Attribute, Cell, Color};
+use toml::Value;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum CellColor {
@@ -36,25 +37,25 @@ pub enum CellColor {
 }
 
 impl CellColor {
-   pub fn key(self) -> &'static str {
+   pub const fn key(self) -> &'static str {
       match self {
-         CellColor::Black => "black",
-         CellColor::Red => "red",
-         CellColor::Green => "green",
-         CellColor::Yellow => "yellow",
-         CellColor::Blue => "blue",
-         CellColor::Magenta => "magenta",
-         CellColor::Cyan => "cyan",
-         CellColor::White => "white",
-         CellColor::Grey => "grey",
-         CellColor::DarkRed => "dark_red",
-         CellColor::DarkGreen => "dark_green",
-         CellColor::DarkYellow => "dark_yellow",
-         CellColor::DarkBlue => "dark_blue",
-         CellColor::DarkMagenta => "dark_magenta",
-         CellColor::DarkCyan => "dark_cyan",
-         CellColor::DarkGrey => "dark_grey",
-         CellColor::Reset => "reset",
+         Self::Black => "black",
+         Self::Red => "red",
+         Self::Green => "green",
+         Self::Yellow => "yellow",
+         Self::Blue => "blue",
+         Self::Magenta => "magenta",
+         Self::Cyan => "cyan",
+         Self::White => "white",
+         Self::Grey => "grey",
+         Self::DarkRed => "dark_red",
+         Self::DarkGreen => "dark_green",
+         Self::DarkYellow => "dark_yellow",
+         Self::DarkBlue => "dark_blue",
+         Self::DarkMagenta => "dark_magenta",
+         Self::DarkCyan => "dark_cyan",
+         Self::DarkGrey => "dark_grey",
+         Self::Reset => "reset",
       }
    }
 
@@ -63,25 +64,25 @@ impl CellColor {
       Self::value_variants().iter().copied().find(|c| c.key() == key)
    }
 
-   fn to_comfy(self) -> Color {
+   const fn to_comfy(self) -> Color {
       match self {
-         CellColor::Black => Color::Black,
-         CellColor::Red => Color::Red,
-         CellColor::Green => Color::Green,
-         CellColor::Yellow => Color::Yellow,
-         CellColor::Blue => Color::Blue,
-         CellColor::Magenta => Color::Magenta,
-         CellColor::Cyan => Color::Cyan,
-         CellColor::White => Color::White,
-         CellColor::Grey => Color::Grey,
-         CellColor::DarkRed => Color::DarkRed,
-         CellColor::DarkGreen => Color::DarkGreen,
-         CellColor::DarkYellow => Color::DarkYellow,
-         CellColor::DarkBlue => Color::DarkBlue,
-         CellColor::DarkMagenta => Color::DarkMagenta,
-         CellColor::DarkCyan => Color::DarkCyan,
-         CellColor::DarkGrey => Color::DarkGrey,
-         CellColor::Reset => Color::Reset,
+         Self::Black => Color::Black,
+         Self::Red => Color::Red,
+         Self::Green => Color::Green,
+         Self::Yellow => Color::Yellow,
+         Self::Blue => Color::Blue,
+         Self::Magenta => Color::Magenta,
+         Self::Cyan => Color::Cyan,
+         Self::White => Color::White,
+         Self::Grey => Color::Grey,
+         Self::DarkRed => Color::DarkRed,
+         Self::DarkGreen => Color::DarkGreen,
+         Self::DarkYellow => Color::DarkYellow,
+         Self::DarkBlue => Color::DarkBlue,
+         Self::DarkMagenta => Color::DarkMagenta,
+         Self::DarkCyan => Color::DarkCyan,
+         Self::DarkGrey => Color::DarkGrey,
+         Self::Reset => Color::Reset,
       }
    }
 }
@@ -96,13 +97,13 @@ pub enum CellAttr {
 }
 
 impl CellAttr {
-   pub fn key(self) -> &'static str {
+   pub const fn key(self) -> &'static str {
       match self {
-         CellAttr::Bold => "bold",
-         CellAttr::Italic => "italic",
-         CellAttr::Underline => "underline",
-         CellAttr::Dim => "dim",
-         CellAttr::Reset => "reset",
+         Self::Bold => "bold",
+         Self::Italic => "italic",
+         Self::Underline => "underline",
+         Self::Dim => "dim",
+         Self::Reset => "reset",
       }
    }
 
@@ -110,18 +111,18 @@ impl CellAttr {
       let key = key.trim().to_ascii_lowercase();
       // 1.x wrote "nohidden" as its "no attribute" value.
       if key == "nohidden" {
-         return Some(CellAttr::Reset);
+         return Some(Self::Reset);
       }
       Self::value_variants().iter().copied().find(|a| a.key() == key)
    }
 
-   fn to_comfy(self) -> Attribute {
+   const fn to_comfy(self) -> Attribute {
       match self {
-         CellAttr::Bold => Attribute::Bold,
-         CellAttr::Italic => Attribute::Italic,
-         CellAttr::Underline => Attribute::Underlined,
-         CellAttr::Dim => Attribute::Dim,
-         CellAttr::Reset => Attribute::NormalIntensity,
+         Self::Bold => Attribute::Bold,
+         Self::Italic => Attribute::Italic,
+         Self::Underline => Attribute::Underlined,
+         Self::Dim => Attribute::Dim,
+         Self::Reset => Attribute::NormalIntensity,
       }
    }
 }
@@ -140,7 +141,7 @@ pub struct TableStyle<'a> {
 }
 
 impl<'a> TableStyle<'a> {
-   pub fn load(settings: &'a toml::Table, name: &'static str) -> Self {
+   pub const fn load(settings: &'a toml::Table, name: &'static str) -> Self {
       Self {
          table: settings,
          name,
@@ -152,11 +153,11 @@ impl<'a> TableStyle<'a> {
          .table
          .get(self.name)
          .and_then(|t| t.get(part))
-         .and_then(toml::Value::as_table);
+         .and_then(Value::as_table);
       let read = |suffix: &str| {
          user
             .and_then(|t| t.get(&format!("{column}.{suffix}")))
-            .and_then(toml::Value::as_str)
+            .and_then(Value::as_str)
       };
       let default = default_look(self.name, part, column);
       Look {
@@ -170,7 +171,7 @@ impl<'a> TableStyle<'a> {
    }
 
    pub fn cell(&self, column: &str, text: impl ToString) -> Cell {
-      apply(Cell::new(text.to_string()), self.look("cells", column))
+      apply(Cell::new(text), self.look("cells", column))
    }
 }
 
@@ -203,6 +204,10 @@ fn default_look(table: &str, part: &str, column: &str) -> Look {
 }
 
 #[cfg(test)]
+#[expect(
+   clippy::unwrap_used,
+   reason = "test setup and assertions intentionally fail on error"
+)]
 mod tests {
    use super::*;
 

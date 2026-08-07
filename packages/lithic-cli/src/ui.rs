@@ -1,12 +1,15 @@
 use std::collections::HashMap;
-use std::io::{IsTerminal, Write};
-use std::sync::{Arc, Mutex};
+use std::env;
+use std::fmt::{self, Display, Formatter};
+use std::io::{IsTerminal, Write, stderr, stdin, stdout};
+use std::result::Result as StdResult;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use comfy_table::presets::UTF8_FULL_CONDENSED;
 use comfy_table::{ContentArrangement, Table};
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
-use lithic_core::{Event, Reporter, Step};
+use lithic_core::{Error, Event, Reporter, Step};
 use serde::Serialize;
 
 use crate::args::{ColorChoice, Global};
@@ -17,52 +20,67 @@ use crate::style::TableStyle;
 #[derive(Debug)]
 pub struct Failure(pub String);
 
-impl std::fmt::Display for Failure {
-   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for Failure {
+   fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
       f.write_str(&self.0)
    }
 }
 
-impl From<lithic_core::Error> for Failure {
-   fn from(e: lithic_core::Error) -> Self {
-      Failure(e.to_string())
+impl From<Error> for Failure {
+   fn from(e: Error) -> Self {
+      Self(e.to_string())
    }
 }
 
-pub type Result<T = ()> = std::result::Result<T, Failure>;
+pub type Result<T = ()> = StdResult<T, Failure>;
 
 pub fn fail<T>(message: impl Into<String>) -> Result<T> {
    Err(Failure(message.into()))
+}
+
+enum Interaction {
+   Terminal,
+   Unavailable,
 }
 
 pub struct Ui {
    pub json: bool,
    pub yes: bool,
    pub quiet: bool,
-   color: bool,
-   interactive: bool,
+   color: ColorChoice,
+   interaction: Interaction,
    table_settings: toml::Table,
 }
 
 impl Ui {
    pub fn new(global: &Global, table_settings: toml::Table) -> Self {
-      let stdout_tty = std::io::stdout().is_terminal();
+      let stdout_tty = stdout().is_terminal();
       let color = match global.color {
-         ColorChoice::Always => true,
-         ColorChoice::Never => false,
-         ColorChoice::Auto => stdout_tty && std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty()),
+         ColorChoice::Always => ColorChoice::Always,
+         ColorChoice::Never => ColorChoice::Never,
+         ColorChoice::Auto => {
+            if stdout_tty && env::var_os("NO_COLOR").is_none_or(|v| v.is_empty()) {
+               ColorChoice::Always
+            } else {
+               ColorChoice::Never
+            }
+         }
       };
       Self {
          json: global.json,
          yes: global.yes,
          quiet: global.quiet,
          color,
-         interactive: std::io::stdin().is_terminal() && std::io::stderr().is_terminal(),
+         interaction: if stdin().is_terminal() && stderr().is_terminal() {
+            Interaction::Terminal
+         } else {
+            Interaction::Unavailable
+         },
          table_settings,
       }
    }
 
-   pub fn style(&self, table: &'static str) -> TableStyle<'_> {
+   pub const fn style(&self, table: &'static str) -> TableStyle<'_> {
       TableStyle::load(&self.table_settings, table)
    }
 
@@ -71,7 +89,7 @@ impl Ui {
       table
          .load_style(UTF8_FULL_CONDENSED.with_rounded_corners())
          .set_content_arrangement(ContentArrangement::Dynamic);
-      if self.color {
+      if matches!(self.color, ColorChoice::Always) {
          table.enforce_styling();
       } else {
          table.force_no_tty();
@@ -79,31 +97,40 @@ impl Ui {
       table
    }
 
-   pub fn print_table(&self, table: &Table) {
+   #[expect(clippy::print_stdout, reason = "formatted tables are CLI output")]
+   pub fn print_table(table: &Table) {
       println!("{table}");
    }
 
-   pub fn print_json<T: Serialize + ?Sized>(&self, value: &T) -> Result {
+   #[expect(clippy::print_stdout, reason = "serialized JSON is CLI output")]
+   pub fn print_json<T: Serialize + ?Sized>(value: &T) -> Result {
       let text = serde_json::to_string_pretty(value).map_err(|e| Failure(e.to_string()))?;
       println!("{text}");
       Ok(())
    }
 
    /// A progress or result line on stderr, so stdout stays clean for data.
+   #[expect(
+      clippy::print_stderr,
+      reason = "CLI status goes to stderr to keep stdout clean for data"
+   )]
    pub fn status(&self, message: impl AsRef<str>) {
       if !self.quiet {
          eprintln!("{}", message.as_ref());
       }
    }
 
+   #[expect(clippy::print_stderr, reason = "CLI warnings go to stderr")]
    pub fn warn(&self, message: impl AsRef<str>) {
       eprintln!("{} {}", self.paint("warning:", "33;1"), message.as_ref());
    }
 
+   #[expect(clippy::print_stderr, reason = "CLI errors go to stderr")]
    pub fn error(&self, message: impl AsRef<str>) {
       eprintln!("{} {}", self.paint("error:", "31;1"), message.as_ref());
    }
 
+   #[expect(clippy::print_stderr, reason = "CLI success notices go to stderr")]
    pub fn success(&self, message: impl AsRef<str>) {
       if !self.quiet {
          eprintln!("{} {}", self.paint("ok", "32;1"), message.as_ref());
@@ -111,7 +138,7 @@ impl Ui {
    }
 
    pub fn paint(&self, text: &str, sgr: &str) -> String {
-      if self.color {
+      if matches!(self.color, ColorChoice::Always) {
          format!("\x1b[{sgr}m{text}\x1b[0m")
       } else {
          text.to_string()
@@ -120,41 +147,46 @@ impl Ui {
 
    /// Asks before a destructive step. Without a terminal to ask on, only
    /// `--yes` lets it go ahead.
+   #[expect(
+      clippy::print_stderr,
+      reason = "interactive confirmation prompts go to stderr"
+   )]
    pub fn confirm(&self, question: &str) -> Result<bool> {
       if self.yes {
          return Ok(true);
       }
-      if !self.interactive {
+      if matches!(self.interaction, Interaction::Unavailable) {
          return fail(format!(
             "{question} Pass --yes to confirm when not running interactively."
          ));
       }
       eprint!("{question} [y/N] ");
-      let _ = std::io::stderr().flush();
+      let _ = stderr().flush();
       let mut answer = String::new();
-      std::io::stdin()
+      stdin()
          .read_line(&mut answer)
          .map_err(|e| Failure(e.to_string()))?;
       Ok(matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes"))
    }
 
+   #[expect(clippy::print_stderr, reason = "interactive input prompts go to stderr")]
    pub fn prompt(&self, question: &str) -> Result<String> {
-      if !self.interactive {
+      if matches!(self.interaction, Interaction::Unavailable) {
          return fail(format!(
             "{question} needs a terminal; pass the value as an option instead"
          ));
       }
       eprint!("{question}: ");
-      let _ = std::io::stderr().flush();
+      let _ = stderr().flush();
       let mut answer = String::new();
-      std::io::stdin()
+      stdin()
          .read_line(&mut answer)
          .map_err(|e| Failure(e.to_string()))?;
       Ok(answer.trim().to_string())
    }
 
    pub fn prompt_secret(&self, question: &str) -> Result<String> {
-      if !self.interactive {
+      if matches!(self.interaction, Interaction::Unavailable) {
          return fail(format!(
             "{question} needs a terminal; use --password-stdin instead"
          ));
@@ -164,8 +196,12 @@ impl Ui {
 
    /// A reporter that draws progress bars on stderr, or does nothing when
    /// output is not a terminal or is meant for scripts.
+   #[expect(
+      clippy::literal_string_with_formatting_args,
+      reason = "indicatif parses these placeholders as progress templates"
+   )]
    pub fn progress(&self) -> Progress {
-      if self.quiet || self.json || !std::io::stderr().is_terminal() {
+      if self.quiet || self.json || !stderr().is_terminal() {
          return Progress {
             reporter: Reporter::none(),
             multi: None,
@@ -174,21 +210,21 @@ impl Ui {
       let multi = MultiProgress::with_draw_target(ProgressDrawTarget::stderr());
       let spinner = multi.add(ProgressBar::new_spinner());
       spinner.set_style(
-         ProgressStyle::with_template("{spinner} {msg}").unwrap_or(ProgressStyle::default_spinner()),
+         ProgressStyle::with_template("{spinner} {msg}").unwrap_or_else(|_| ProgressStyle::default_spinner()),
       );
       spinner.enable_steady_tick(Duration::from_millis(120));
       let bars: Arc<Mutex<HashMap<String, ProgressBar>>> = Arc::default();
       let bar_style = ProgressStyle::with_template(
          "  {msg:30!} {bar:30} {bytes:>10}/{total_bytes:10} {bytes_per_sec:>12}",
       )
-      .unwrap_or(ProgressStyle::default_bar());
+      .unwrap_or_else(|_| ProgressStyle::default_bar());
 
       let m = multi.clone();
       let reporter = Reporter::new(move |event| match event {
          Event::Step(step) => spinner.set_message(step_text(step)),
          Event::Log(line) => spinner.set_message(line),
          Event::Transfer { label, done, total } => {
-            let mut bars = bars.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut bars = bars.lock().unwrap_or_else(PoisonError::into_inner);
             let bar = bars.entry(label.clone()).or_insert_with(|| {
                let bar = m.add(ProgressBar::new(total.unwrap_or(0)));
                bar.set_style(bar_style.clone());
@@ -202,6 +238,7 @@ impl Ui {
             if total.is_some_and(|t| done >= t) {
                bar.finish_and_clear();
             }
+            drop(bars);
          }
       });
       Progress {
@@ -253,6 +290,10 @@ pub fn format_duration(ms: i64) -> String {
    }
 }
 
+#[expect(
+   clippy::cast_precision_loss,
+   reason = "human-readable counts intentionally round to one decimal after scaling"
+)]
 pub fn format_count(n: i64) -> String {
    match n {
       n if n >= 1_000_000 => format!("{:.1}M", n as f64 / 1_000_000.0),
