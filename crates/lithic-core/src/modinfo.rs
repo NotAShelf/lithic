@@ -2,8 +2,10 @@
 //! folders with a `modinfo.json`, `.cs` source mods, and `.dll` mods.
 
 use std::collections::BTreeMap;
+use std::fs::{self, File};
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::result;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -13,7 +15,7 @@ use crate::error::{Error, IoContext, Result};
 pub const MODINFO_FILE: &str = "modinfo.json";
 
 /// Dependencies every mod may declare on the base game. They are never
-/// installed from the ModDB.
+/// installed from the `ModDB`.
 pub const GAME_MOD_IDS: [&str; 3] = ["game", "survival", "creative"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -26,15 +28,16 @@ pub enum Format {
 }
 
 impl Format {
+   #[must_use]
    pub fn of(path: &Path) -> Option<Self> {
       if path.is_dir() {
-         return Some(Format::Folder);
+         return Some(Self::Folder);
       }
       let ext = path.extension()?.to_str()?.to_ascii_lowercase();
       match ext.as_str() {
-         "zip" => Some(Format::Zip),
-         "cs" => Some(Format::Cs),
-         "dll" => Some(Format::Dll),
+         "zip" => Some(Self::Zip),
+         "cs" => Some(Self::Cs),
+         "dll" => Some(Self::Dll),
          _ => None,
       }
    }
@@ -65,6 +68,7 @@ impl ModInfo {
    }
 }
 
+#[must_use]
 pub fn is_game_mod(mod_id: &str) -> bool {
    GAME_MOD_IDS.iter().any(|g| g.eq_ignore_ascii_case(mod_id))
 }
@@ -75,11 +79,13 @@ pub fn mod_id_from_name(name: &str) -> String {
    name
       .chars()
       .filter(char::is_ascii_alphanumeric)
-      .flat_map(|c| c.to_lowercase())
+      .flat_map(char::to_lowercase)
       .collect()
 }
 
 /// Reads metadata for one mod file or folder.
+/// # Errors
+/// Returns an error for an unsupported mod file, unreadable metadata, or invalid JSON.
 pub fn read(path: &Path) -> Result<ModInfo> {
    let format = Format::of(path).ok_or_else(|| Error::invalid(format!("{} is not a mod", path.display())))?;
    match format {
@@ -87,11 +93,11 @@ pub fn read(path: &Path) -> Result<ModInfo> {
       Format::Folder => {
          let file = find_case_insensitive(path, MODINFO_FILE)
             .ok_or_else(|| Error::parse(path.display().to_string(), "folder has no modinfo.json"))?;
-         let text = std::fs::read_to_string(&file).at(&file)?;
+         let text = fs::read_to_string(&file).at(&file)?;
          parse_json(&text).map_err(|e| Error::parse(file.display().to_string(), e))
       }
       Format::Cs => {
-         let text = std::fs::read_to_string(path).at(path)?;
+         let text = fs::read_to_string(path).at(path)?;
          Ok(parse_cs(&text).unwrap_or_else(|| guessed(path)))
       }
       Format::Dll => Ok(guessed(path)),
@@ -101,8 +107,10 @@ pub fn read(path: &Path) -> Result<ModInfo> {
 /// Reads `modinfo.json` from the root of an archive. Archives without one
 /// (code mods that carry their metadata in a `.dll` attribute) fall back to
 /// an id guessed from the file name.
+/// # Errors
+/// Returns an error if the archive cannot be opened or its metadata is invalid.
 pub fn read_zip(path: &Path) -> Result<ModInfo> {
-   let file = std::fs::File::open(path).at(path)?;
+   let file = File::open(path).at(path)?;
    let mut archive = zip::ZipArchive::new(file).map_err(|e| Error::parse(path.display().to_string(), e))?;
 
    let index = (0..archive.len()).find(|&i| {
@@ -125,7 +133,9 @@ pub fn read_zip(path: &Path) -> Result<ModInfo> {
 
 /// Parses `modinfo.json` text. Accepts JSON5 (comments, trailing commas), a
 /// leading byte-order mark, and any capitalisation of keys.
-pub fn parse_json(text: &str) -> std::result::Result<ModInfo, String> {
+/// # Errors
+/// Returns an error when the input is invalid JSON or lacks both a mod id and name.
+pub fn parse_json(text: &str) -> result::Result<ModInfo, String> {
    let text = text.trim_start_matches('\u{feff}');
    let value: Value = serde_json5::from_str(text).map_err(|e| e.to_string())?;
    let Value::Object(raw) = value else {
@@ -177,6 +187,7 @@ pub fn parse_json(text: &str) -> std::result::Result<ModInfo, String> {
 
 /// Pulls `[assembly: ModInfo(...)]` and `[assembly: ModDependency(...)]` out of
 /// a source mod. Returns `None` when there is no `ModInfo` attribute.
+#[must_use]
 pub fn parse_cs(source: &str) -> Option<ModInfo> {
    let args = attribute_args(source, "ModInfo").into_iter().next()?;
    let (positional, named) = split_args(&args);
@@ -184,8 +195,7 @@ pub fn parse_cs(source: &str) -> Option<ModInfo> {
    let name = positional.first().cloned().unwrap_or_default();
    let mod_id = positional
       .get(1)
-      .map(|s| s.to_ascii_lowercase())
-      .unwrap_or_else(|| mod_id_from_name(&name));
+      .map_or_else(|| mod_id_from_name(&name), |s| s.to_ascii_lowercase());
    if mod_id.is_empty() {
       return None;
    }
@@ -236,8 +246,8 @@ fn string(value: Option<&Value>) -> Option<String> {
    }
 }
 
-fn find_case_insensitive(dir: &Path, name: &str) -> Option<std::path::PathBuf> {
-   std::fs::read_dir(dir)
+fn find_case_insensitive(dir: &Path, name: &str) -> Option<PathBuf> {
+   fs::read_dir(dir)
       .ok()?
       .flatten()
       .find(|e| e.file_name().to_string_lossy().eq_ignore_ascii_case(name))
@@ -379,9 +389,14 @@ fn literals(text: &str) -> Vec<String> {
 }
 
 #[cfg(test)]
+#[expect(
+   clippy::unwrap_used,
+   reason = "test setup and assertions intentionally fail on error"
+)]
 mod tests {
    use super::*;
    use std::io::Write;
+   use zip::write::SimpleFileOptions;
 
    #[test]
    fn json_keys_any_case_with_comments() {
@@ -439,17 +454,16 @@ mod tests {
    fn zip_with_and_without_modinfo() {
       let dir = tempfile::tempdir().unwrap();
       let with = dir.path().join("with.zip");
-      let mut w = zip::ZipWriter::new(std::fs::File::create(&with).unwrap());
-      w.start_file("ModInfo.JSON", zip::write::SimpleFileOptions::default())
+      let mut w = zip::ZipWriter::new(File::create(&with).unwrap());
+      w.start_file("ModInfo.JSON", SimpleFileOptions::default())
          .unwrap();
       w.write_all(br#"{"modid":"withmod","version":"0.1.0"}"#).unwrap();
       w.finish().unwrap();
       assert_eq!(read(&with).unwrap().mod_id, "withmod");
 
       let without = dir.path().join("SomeLib-1.0.zip");
-      let mut w = zip::ZipWriter::new(std::fs::File::create(&without).unwrap());
-      w.start_file("lib.dll", zip::write::SimpleFileOptions::default())
-         .unwrap();
+      let mut w = zip::ZipWriter::new(File::create(&without).unwrap());
+      w.start_file("lib.dll", SimpleFileOptions::default()).unwrap();
       w.write_all(b"MZ").unwrap();
       w.finish().unwrap();
       let info = read(&without).unwrap();
