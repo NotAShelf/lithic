@@ -276,14 +276,19 @@ impl State {
 }
 
 #[cfg(test)]
+#[expect(
+   clippy::unwrap_used,
+   reason = "test setup and assertions intentionally fail on error"
+)]
 mod tests {
    use super::*;
+   use lithic_core::{Lithic, Paths};
 
    #[test]
    fn code_input_keeps_digits_only() {
       let mut s = State::default();
       let dir = tempfile::tempdir().unwrap();
-      let mut shared = Shared::new(lithic_core::Lithic::new(lithic_core::Paths::rooted(dir.path())).unwrap());
+      let mut shared = Shared::new(Lithic::new(Paths::rooted(dir.path())).unwrap());
       let _ = s.update(Message::Code("12a 34-56789".into()), &mut shared);
       assert_eq!(s.code, "12345678");
    }
@@ -291,7 +296,7 @@ mod tests {
    #[test]
    fn two_factor_flow() {
       let dir = tempfile::tempdir().unwrap();
-      let mut shared = Shared::new(lithic_core::Lithic::new(lithic_core::Paths::rooted(dir.path())).unwrap());
+      let mut shared = Shared::new(Lithic::new(Paths::rooted(dir.path())).unwrap());
       let mut s = State::default();
       assert!(!s.can_submit());
       let _ = s.update(Message::Email("a@b".into()), &mut shared);
