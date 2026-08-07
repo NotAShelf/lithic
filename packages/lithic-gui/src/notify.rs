@@ -6,14 +6,16 @@ use std::time::Duration;
 
 use iced::widget::{button, column, container, row, text};
 use iced::{Element, Fill, Task};
+use tokio::time::sleep;
 
+use crate::app::Message as AppMessage;
 use crate::i18n::t;
 use crate::style::{self, Tone};
 
 const EXPIRE_AFTER: Duration = Duration::from_secs(5);
 const MAX_SHOWN: usize = 5;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum Message {
    Dismiss(u64),
    Expire(u64),
@@ -29,16 +31,16 @@ pub enum Severity {
 }
 
 impl Severity {
-   fn sticky(self) -> bool {
-      matches!(self, Severity::Error | Severity::Warning)
+   const fn sticky(self) -> bool {
+      matches!(self, Self::Error | Self::Warning)
    }
 
-   fn tone(self) -> Tone {
+   const fn tone(self) -> Tone {
       match self {
-         Severity::Error => Tone::Bad,
-         Severity::Warning => Tone::Warn,
-         Severity::Success => Tone::Good,
-         Severity::Info => Tone::Accent,
+         Self::Error => Tone::Bad,
+         Self::Warning => Tone::Warn,
+         Self::Success => Tone::Good,
+         Self::Info => Tone::Accent,
       }
    }
 }
@@ -64,7 +66,7 @@ impl Notifications {
       severity: Severity,
       title: impl Into<String>,
       detail: Option<String>,
-   ) -> Task<crate::app::Message> {
+   ) -> Task<AppMessage> {
       let title = title.into();
       if self
          .items
@@ -89,25 +91,25 @@ impl Notifications {
       if severity.sticky() {
          Task::none()
       } else {
-         Task::perform(async { tokio::time::sleep(EXPIRE_AFTER).await }, move |()| {
-            crate::app::Message::Toast(Message::Expire(id))
+         Task::perform(async { sleep(EXPIRE_AFTER).await }, move |()| {
+            AppMessage::Toast(Message::Expire(id))
          })
       }
    }
 
-   pub fn error(&mut self, title: impl Into<String>, detail: Option<String>) -> Task<crate::app::Message> {
+   pub fn error(&mut self, title: impl Into<String>, detail: Option<String>) -> Task<AppMessage> {
       self.push(Severity::Error, title, detail)
    }
 
-   pub fn warning(&mut self, title: impl Into<String>) -> Task<crate::app::Message> {
+   pub fn warning(&mut self, title: impl Into<String>) -> Task<AppMessage> {
       self.push(Severity::Warning, title, None)
    }
 
-   pub fn success(&mut self, title: impl Into<String>) -> Task<crate::app::Message> {
+   pub fn success(&mut self, title: impl Into<String>) -> Task<AppMessage> {
       self.push(Severity::Success, title, None)
    }
 
-   pub fn info(&mut self, title: impl Into<String>) -> Task<crate::app::Message> {
+   pub fn info(&mut self, title: impl Into<String>) -> Task<AppMessage> {
       self.push(Severity::Info, title, None)
    }
 
@@ -122,7 +124,7 @@ impl Notifications {
       }
    }
 
-   pub fn is_empty(&self) -> bool {
+   pub const fn is_empty(&self) -> bool {
       self.items.is_empty()
    }
 
