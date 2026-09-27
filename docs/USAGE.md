@@ -48,15 +48,20 @@ pack, or delete it.
 
 **Browse mods** searches the ModDB. By default it only shows mods with releases
 for the game version of the instance you are installing into; turn that off to
-see everything. The download button installs a mod into the selected instance.
-Use Details to read its description, save it as a favourite, or install a
-specific release. Installing a specific release pins the mod to it.
+see everything. "Hide installed mods" removes mods already in that instance from
+the list. The rightmost star adds or removes a favourite. Use Details to read
+the description or install a specific release. Installing a specific release
+pins the mod to it.
 
 **Game versions** installs official builds, shows which instances use each
-version, and registers copies you installed yourself.
+version, and registers copies you installed yourself. Removing a downloaded
+version deletes its files; instances using it cannot be played until you
+reinstall it or select another version.
 
 **Accounts** signs you in. With an account, the game starts already logged in.
 Each instance can use its own account; otherwise it uses the active one.
+If the game rejects a saved session, sign in again. Lithic keeps a renewed game
+session after a normal launch closes.
 
 Account sessions go to the system keyring (Secret Service on Linux, Keychain on
 macOS, Credential Manager on Windows). If none is available, lithic stores them
@@ -70,60 +75,67 @@ things ask first; pass `--yes` to skip the question.
 Set up an instance and a game version:
 
 ```sh
-lithic game install latest
-lithic instance create "Survival" --game latest --select
+# Instance management from the CLI
+$ lithic game install latest
+$ lithic instance create "Survival" --game latest --select
 ```
 
 Or keep using the folder the official launcher created:
 
 ```sh
-lithic instance adopt --game 1.21.5
+# Adopt an existing install
+$ lithic instance adopt --game 1.21.5
 ```
 
 Find and install mods. Dependencies come along automatically:
 
 ```sh
-lithic search carry on
-lithic info carryon
-lithic install carryon expandedfoods
-lithic install carryon@1.13.0        # this exact version, pinned
-lithic list
-lithic mods check                    # missing or outdated dependencies
+# Mod management
+$ lithic search carry on
+$ lithic info carryon
+$ lithic install carryon expandedfoods
+$ lithic install carryon@1.13.0        # this exact version, pinned
+$ lithic list
+$ lithic mods check                    # missing or outdated dependencies
 ```
 
 Keep them current:
 
 ```sh
-lithic update --check    # what would change
-lithic update            # update everything
-lithic update carryon    # just one mod
-lithic mods pin carryon  # stay on the installed version
-lithic mods disable carryon
+# Updating and pinning mods
+$ lithic update --check    # what would change
+$ lithic update            # update everything
+$ lithic update carryon    # just one mod
+$ lithic mods pin carryon  # stay on the installed version
+$ lithic mods disable carryon
 ```
 
 Work on an instance other than the selected one with `-i`:
 
 ```sh
-lithic -i creative list
-lithic instance select creative
+# Specify an instance to run commands *for*
+$ lithic -i creative list
+$ lithic instance select creative
 ```
 
 Play:
 
 ```sh
-lithic launch            # waits for the game to close and records play time
-lithic launch --dry-run  # prints the command without running it
-lithic logs              # output of the last launch
-lithic logs --game       # the game's own client-main.log
+# Launch the game
+$ lithic launch            # waits for the game to close and records play time
+$ lithic launch --dry-run  # prints the command without running it
+$ lithic logs              # output of the last launch
+$ lithic logs --game       # the game's own client-main.log
 ```
 
 Accounts and packs:
 
 ```sh
-lithic account login
-lithic instance edit --account "YourPlayerName"
-lithic pack export -o survival.zip --config
-lithic pack import survival.zip --name "Friend's pack"
+# Account management
+$ lithic account login
+$ lithic instance edit --account "YourPlayerName"
+$ lithic pack export -o survival.zip --config
+$ lithic pack import survival.zip --name "Friend's pack"
 ```
 
 `lithic settings show` lists the settings you can change with
