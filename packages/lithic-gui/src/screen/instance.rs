@@ -89,7 +89,10 @@ impl Form {
    fn from(instance: &Instance, shared: &Shared) -> Self {
       let game = instance.game_version.as_ref().map(|v| GameChoice {
          version: v.clone(),
-         installed: shared.installs.iter().any(|i| i.version == *v),
+         installed: shared
+            .installs
+            .iter()
+            .any(|i| i.version == *v && i.is_available()),
       });
       let env = instance
          .launch
@@ -782,7 +785,7 @@ impl State {
       let game_ok = instance
          .game_version
          .as_deref()
-         .is_some_and(|v| shared.installs.iter().any(|i| i.version == v));
+         .is_some_and(|v| shared.installs.iter().any(|i| i.version == v && i.is_available()));
 
       let mut title = row![text(&instance.name).size(26).font(widget::bold())]
          .spacing(10)
