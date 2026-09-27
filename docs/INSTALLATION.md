@@ -1,12 +1,25 @@
 # Installation
 
-There are two ways to install Lithic on your system.
+Lithic ships as three programs:
+
+- `lithic` opens the app when started without arguments and runs commands
+  otherwise. This is the one to use.
+- `lithic-gui` only opens the app. On Windows it starts without a console
+  window.
+- `lithic-cli` only runs CLI commands.
+
+> [!NOTE]
+> Outside the Nix package, Lithic does not install what the game itself needs
+> to run, such as the .NET runtime on Linux. You are encouraged to install
+> this as a part per-distribution packaging steps.
+
+There are two ways to install Lithic on your system:
 
 ## With Nix
 
 Nix is the recommended way of downloading (and developing!) Lithic. You can
 install it using Nix flakes using `nix profile add` if on non-nixos or add
-Lithic as a flake input if you are on NixOS or Darwin.
+Lithic as a flake input if you are on NixOS or Darwin:
 
 ```nix
 {
@@ -28,15 +41,32 @@ in {
 }
 ```
 
+The Nix package wraps Lithic with .NET 8 and 10, so games launched through it
+can find the runtime needed by Vintage Story 1.21 and 1.22. Older game versions
+need other runtimes; see [Vintage Story's Linux installation guide](https://wiki.vintagestory.at/Installing_the_game_on_Linux).
+
 If you want to give Lithic a try before you switch to it, you may also run it
 one time with `nix run`.
 
 ```sh
 # Run directly from the git repository; will be garbage collected
-$ nix run github:NotAShelf/lithic # start the watch daemon
+$ nix run github:NotAShelf/lithic # run
 ```
 
 ## Without Nix
+
+The package includes a desktop entry, so lithic shows up in your application
+menu and handles the install buttons on the ModDB website.
+
+To try it without installing:
+
+```sh
+nix run github:NotAShelf/lithic
+```
+
+### Release archives
+
+Tagged releases on [GitHub](https://github.com/notashelf/lithic/releases) have
 
 [GitHub Releases]: https://github.com/notashelf/lithic/releases
 
@@ -65,16 +95,38 @@ or you may check out to the repository, and use Cargo to build it before
 1.91.0 or above. Most distributions should package this version already. You
 may, of course, prefer to package the built releases if you'd like.
 
-### Windows
-
-For Windows, download the `lithic-windows-x86_64.zip` archive from
-[GitHub Releases], extract it with File Explorer, and run `lithic-gui.exe` for
-the graphical interface. To use the CLI, open a terminal in the extracted folder
-and run:
+On Windows, start `lithic-gui.exe` for the app. For commands, open a terminal in
+the extracted folder:
 
 ```powershell
-.\lithic-cli.exe --help
+# Use the .exe on Windows.
+$ .\lithic.exe --help
 ```
 
-You do not need to add the folder to `PATH` unless you want to run Lithic from
-other directories.
+## Post-Installation
+
+On Linux, run this once so the app appears in your menu and install buttons on
+the ModDB open lithic:
+
+```sh
+# Installs the desktop file.
+$ lithic desktop-entry
+```
+
+### From source
+
+You need Rust 1.95 or newer.
+
+```sh
+# Clone the repository and navigate to it
+$ git clone https://github.com/notashelf/lithic; cd lithic
+
+# Install it from the crate source epath
+$ cargo install --path packages/lithic --locked
+```
+
+> [!TIP]
+> On Linux, building needs the development files for `libxkbcommon` and
+> `wayland`, which most distributions package as `libxkbcommon-dev` and
+> `libwayland-dev` or similar. At runtime the app loads the Wayland or X11
+> libraries your desktop already has.
