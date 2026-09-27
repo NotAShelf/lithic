@@ -14,6 +14,7 @@ chrono             = { workspace = true }
 clap               = { workspace = true }
 clap_complete      = { workspace = true }
 comfy-table        = { workspace = true }
+ini-edit           = { workspace = true }
 indicatif          = { workspace = true }
 lithic-core        = { workspace = true }
 rpassword          = { workspace = true }
