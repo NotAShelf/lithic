@@ -60,6 +60,34 @@ pub fn inject_account(data_dir: &Path, account: &AccountIdentity<'_>) -> Result<
    fsutil::write_atomic(&path, &json)
 }
 
+/// Reads a complete session saved by the game after login.
+///
+/// # Errors
+/// Returns an error if the game's settings cannot be read or parsed.
+pub(crate) fn game_session(data_dir: &Path) -> Result<Option<(String, Session)>> {
+   let root = read_root(&data_dir.join(CLIENTSETTINGS_FILE))?;
+   let Some(Value::Object(settings)) = root.get("stringSettings") else {
+      return Ok(None);
+   };
+   let field = |key| settings.get(key).and_then(Value::as_str).unwrap_or_default();
+   let uid = field("useridentifier");
+   let sessionkey = field("sessionkey");
+   let sessionsignature = field("sessionsignature");
+   let mptoken = field("mptoken");
+   if uid.is_empty() || sessionkey.is_empty() || sessionsignature.is_empty() || mptoken.is_empty() {
+      return Ok(None);
+   }
+   Ok(Some((
+      uid.to_string(),
+      Session {
+         sessionkey: sessionkey.to_string(),
+         sessionsignature: sessionsignature.to_string(),
+         mptoken: mptoken.to_string(),
+         entitlements: field("entitlements").to_string(),
+      },
+   )))
+}
+
 fn read_root(path: &Path) -> Result<Map<String, Value>> {
    match fs::read_to_string(path) {
       Ok(text) => match serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')) {

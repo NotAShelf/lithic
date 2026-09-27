@@ -4,6 +4,8 @@
 //! Account names and ids live in `accounts.toml`; the secret session lives in
 //! the keyring or a private file (see [`store`]).
 
+use std::path::Path;
+
 pub mod client;
 pub mod clientsettings;
 pub mod store;
@@ -178,6 +180,30 @@ impl Lithic {
          },
       )?;
       Ok(Some(account.clone()))
+   }
+
+   /// Keeps a session renewed by the game after login for subsequent launches.
+   ///
+   /// # Errors
+   /// Returns an error if the game's settings cannot be read or the session cannot be saved.
+   pub(crate) fn sync_game_session(&self, data_dir: &Path, account: &Account) -> Result<()> {
+      let Some((uid, mut session)) = clientsettings::game_session(data_dir)? else {
+         return Ok(());
+      };
+      if uid != account.uid {
+         return Ok(());
+      }
+      let store = self.sessions();
+      let Some(saved) = store.load(&uid) else {
+         return Ok(());
+      };
+      if session.entitlements.is_empty() {
+         session.entitlements.clone_from(&saved.entitlements);
+      }
+      if session != saved {
+         store.save(&uid, &session)?;
+      }
+      Ok(())
    }
 }
 
