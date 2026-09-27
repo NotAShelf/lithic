@@ -149,7 +149,7 @@ impl Lithic {
    )> {
       let spec = self.launch_spec(instance)?;
       fs::create_dir_all(instance.mods_dir()).at(instance.mods_dir())?;
-      self.inject_account(instance)?;
+      let account = self.inject_account(instance)?;
 
       let logs = instance.logs_dir();
       fs::create_dir_all(&logs).at(&logs)?;
@@ -183,6 +183,7 @@ impl Lithic {
 
       let lithic = self.clone();
       let instance_id = instance.id.clone();
+      let data_dir = instance.data_dir();
       let game_logs = instance.game_logs_dir();
       let waiter = async move {
          let mut stopped = false;
@@ -195,6 +196,11 @@ impl Lithic {
             }
          }
          .at(&log_path)?;
+         if let Some(account) = account
+            && let Err(e) = lithic.sync_game_session(&data_dir, &account)
+         {
+            tracing::warn!("could not save the game login: {e}");
+         }
          let ended_ms = now_ms();
          if let Err(e) = lithic.record_play_session(&instance_id, started_ms, ended_ms) {
             tracing::warn!("could not record play time for {instance_id}: {e}");
@@ -307,6 +313,7 @@ mod tests {
 
    use super::*;
    use crate::Paths;
+   use crate::auth::LoginResponse;
    use crate::instance::NewInstance;
 
    fn setup() -> (tempfile::TempDir, Lithic, Instance) {
@@ -421,6 +428,46 @@ mod tests {
       assert!(exit.tail[0].starts_with("started --dataPath="));
       assert_eq!(exit.log_path, session.log_path);
       assert!(l.instance(&i.id).unwrap().stats.last_played_at.is_some());
+   }
+
+   #[cfg(unix)]
+   #[tokio::test]
+   async fn game_login_survives_the_next_launch() {
+      use std::os::unix::fs::PermissionsExt;
+
+      let (_d, l, i) = setup();
+      l.save_login(
+         "sample@example.invalid",
+         LoginResponse {
+            uid: "uid".into(),
+            playername: "Player".into(),
+            sessionkey: "old".into(),
+            sessionsignature: "old-signature".into(),
+            mptoken: "old-mp".into(),
+            ..Default::default()
+         },
+      )
+      .unwrap();
+      let exe = l.game_install("1.21.5").unwrap().path.join("Vintagestory");
+      fs::write(
+         &exe,
+         "#!/bin/sh\ncat > \"${1#--dataPath=}/clientsettings.json\" <<'EOF'\n{\"stringSettings\":{\"useridentifier\":\"uid\",\"playername\":\"Player\",\"sessionkey\":\"new\",\"sessionsignature\":\"new-signature\",\"mptoken\":\"new-mp\"}}\nEOF\n",
+      )
+      .unwrap();
+      fs::set_permissions(&exe, fs::Permissions::from_mode(0o755)).unwrap();
+
+      let (_, waiter) = l.launch(&i).unwrap();
+      assert!(waiter.await.unwrap().success);
+      let next = l
+         .create_instance(NewInstance {
+            name: "next".into(),
+            ..Default::default()
+         })
+         .unwrap();
+      l.inject_account(&next).unwrap();
+      let settings: serde_json::Value =
+         serde_json::from_slice(&fs::read(next.data_dir().join("clientsettings.json")).unwrap()).unwrap();
+      assert_eq!(settings["stringSettings"]["sessionkey"], "new");
    }
 
    #[cfg(unix)]
