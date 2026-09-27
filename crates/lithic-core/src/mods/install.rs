@@ -332,22 +332,21 @@ impl Lithic {
                }
                Ok(Some(s)) => {
                   attempted.insert(s.mod_id.clone());
-                  if opts.dependencies {
-                     for (dep, required) in s.info.mod_dependencies() {
-                        if attempted.contains(dep) || staged.contains_key(dep) {
-                           continue;
-                        }
-                        let have = installed_version(dep);
-                        if have.is_some_and(|m| version::satisfies(&m.info.version, required)) {
-                           continue;
-                        }
-                        queue.push(Job {
-                           id: dep.clone(),
-                           pin: None,
-                           reason: Reason::Dependency { of: s.mod_id.clone() },
-                           resolved: None,
-                        });
+                  let dependencies = opts.dependencies.then(|| s.info.mod_dependencies());
+                  for (dep, required) in dependencies.into_iter().flatten() {
+                     if attempted.contains(dep) || staged.contains_key(dep) {
+                        continue;
                      }
+                     let have = installed_version(dep);
+                     if have.is_some_and(|m| version::satisfies(&m.info.version, required)) {
+                        continue;
+                     }
+                     queue.push(Job {
+                        id: dep.clone(),
+                        pin: None,
+                        reason: Reason::Dependency { of: s.mod_id.clone() },
+                        resolved: None,
+                     });
                   }
                   staged.insert(s.mod_id.clone(), s);
                }
