@@ -14,6 +14,11 @@
   libxcursor,
   libxi,
   libxrandr,
+  cairo,
+  gtk3,
+  alsa-lib,
+  libpulseaudio,
+  pipewire,
   # Dotnet wrapper
   dotnetCorePackages,
   dotnet-runtime_8,
@@ -24,8 +29,8 @@
   version = cargoTOML.version;
   dotnet = dotnetCorePackages.combinePackages [dotnet-runtime_10 dotnet-runtime_8];
 
-  # winit loads the windowing libraries at runtime, so they have to be on the
-  # library path for both Wayland and X11 sessions.
+  # winit loads windowing libraries at runtime; Vintage Story and its crash
+  # reporter also load graphics and audio libraries from the inherited path.
   runtimeInputs = [
     libxkbcommon
     vulkan-loader
@@ -34,6 +39,11 @@
     libxcursor
     libxi
     libxrandr
+    cairo
+    gtk3
+    alsa-lib
+    libpulseaudio
+    pipewire
   ];
 
   buildInputs = runtimeInputs ++ [openssl.dev];

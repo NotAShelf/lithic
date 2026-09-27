@@ -15,6 +15,11 @@
   libxcursor,
   libxi,
   libxrandr,
+  cairo,
+  gtk3,
+  alsa-lib,
+  libpulseaudio,
+  pipewire,
 }: let
   lithicPkg = self.packages.${stdenv.hostPlatform.system}.lithic;
   runtimeInputs = lib.makeLibraryPath [
@@ -25,6 +30,11 @@
     libxcursor
     libxi
     libxrandr
+    cairo
+    gtk3
+    alsa-lib
+    libpulseaudio
+    pipewire
   ];
 in
   mkShell {
