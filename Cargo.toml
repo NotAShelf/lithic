@@ -27,6 +27,7 @@ dirs = { version = "7.0.0" }
 flate2 = "1"
 futures = "0.3.34"
 html2text = "0.17.1"
+ini-edit = "0.3.2"
 indicatif = { version = "0.18.6", features = [ "tokio" ] }
 keyring = "4.2.0"
 lenient_semver = "0.4.2"

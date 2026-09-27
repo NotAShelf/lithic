@@ -1,6 +1,9 @@
 use std::env;
+use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+
+use ini_edit::editor::{EditOptions, Editor, SeparatorSpacing};
 
 use lithic_core::fsutil;
 
@@ -28,25 +31,29 @@ pub fn install(ctx: &Ctx) -> Result {
    fsutil::write_atomic(&path, entry(&program).as_bytes())?;
    ctx.ui.success(format!("wrote {}", path.display()));
 
-   let registered = Command::new("xdg-mime")
-      .args([
-         "default",
-         "lithic.desktop",
-         "x-scheme-handler/vintagestorymodinstall",
-      ])
-      .status()
-      .is_ok_and(|s| s.success());
-   if registered {
-      ctx.ui
-         .success("install buttons on mods.vintagestory.at now open lithic");
-   } else {
-      ctx.ui.warn(
-         "could not run xdg-mime; register lithic.desktop for x-scheme-handler/vintagestorymodinstall yourself",
-      );
-   }
-   let _ = Command::new("update-desktop-database")
-      .arg(&applications)
-      .status();
+   let config = env::var_os("XDG_CONFIG_HOME")
+      .filter(|v| !v.is_empty())
+      .map(PathBuf::from)
+      .or_else(|| env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
+      .ok_or_else(|| Failure("cannot find your home directory".to_string()))?
+      .join("mimeapps.list");
+   let current = match fs::read_to_string(&config) {
+      Ok(contents) => contents,
+      Err(e) if e.kind() == ErrorKind::NotFound => String::new(),
+      Err(e) => return Err(Failure(e.to_string())),
+   };
+   let editor = Editor::with_edit_options(
+      &current,
+      &EditOptions {
+         separator_spacing: SeparatorSpacing::Compact,
+      },
+   );
+   editor
+      .section("Default Applications")
+      .set("x-scheme-handler/vintagestorymodinstall", "lithic.desktop;");
+   fsutil::write_atomic(&config, editor.finish().as_bytes())?;
+   ctx.ui
+      .success("install buttons on mods.vintagestory.at now open lithic");
    Ok(())
 }
 
