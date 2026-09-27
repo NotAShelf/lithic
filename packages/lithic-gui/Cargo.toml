@@ -10,9 +10,9 @@ homepage.workspace     = true
 repository.workspace   = true
 
 [dependencies]
-chrono             = { workspace = true }
 futures            = { workspace = true }
 iced               = { workspace = true }
+jiff               = { workspace = true }
 lithic-core        = { workspace = true }
 lithic-locale      = { workspace = true }
 native-theme-iced  = { workspace = true }

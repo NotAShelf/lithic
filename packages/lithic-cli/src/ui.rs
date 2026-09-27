@@ -274,11 +274,14 @@ fn step_text(step: Step) -> String {
 }
 
 pub fn format_time(ms: i64) -> String {
-   use chrono::TimeZone;
-   chrono::Local
-      .timestamp_millis_opt(ms)
-      .single()
-      .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
+   use jiff::{Timestamp, tz::TimeZone};
+
+   Timestamp::from_millisecond(ms)
+      .map(|ts| {
+         ts.to_zoned(TimeZone::system())
+            .strftime("%Y-%m-%d %H:%M")
+            .to_string()
+      })
       .unwrap_or_default()
 }
 
