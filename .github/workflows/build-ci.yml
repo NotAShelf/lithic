@@ -14,29 +14,17 @@ concurrency:
 jobs:
   check:
     name: Tests and lints
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: "1.95.0"
-          components: clippy, rustfmt
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libwayland-dev
-
-      - name: Formatting
-        run: cargo fmt --all --check
-
-      - name: Clippy
-        run: cargo clippy --workspace --tests -- -D warnings
-
-      - name: Tests
-        run: cargo test --workspace
+    uses: manic-systems/workflows/.github/workflows/rust-checks.yml@v1
+    permissions:
+      contents: read
+    with:
+      os: ubuntu-latest
+      rust-toolchain: "1.97.1"
+      fmt: true
+      clippy: true
+      clippy-command: nix develop --command cargo clippy --workspace --tests -- -D warnings
+      test: true
+      test-command: nix develop --command cargo test --workspace
 
   build:
     name: ${{ matrix.target }}
@@ -67,7 +55,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.95.0"
+          toolchain: "1.97.1"
           targets: ${{ matrix.target }}
 
       - name: Install system dependencies (Linux)
