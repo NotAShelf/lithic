@@ -11,8 +11,8 @@ use iced::{Center, Color, Element, Fill, Length, Task, Theme};
 use lithic_core::http::Http;
 use lithic_core::moddb::{self, ModDetails, ModSummary, Query, Sort};
 use lithic_core::mods::resolve::{Target, pick_release};
-use lithic_core::mods::{InstallOptions, ModRef};
-use lithic_core::{Freshness, version};
+use lithic_core::mods::{InstallOptions, ModRef, Update};
+use lithic_core::{Cancel, Freshness, version};
 
 use super::format_count;
 use crate::app::{Message as AppMessage, OpKind, Outcome, Shared, Summary};
@@ -24,6 +24,13 @@ use crate::widget;
 const PAGE: usize = 40;
 const INSTALL_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 17v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>"#;
 static INSTALL_HANDLE: LazyLock<svg::Handle> = LazyLock::new(|| svg::Handle::from_memory(INSTALL_SVG));
+const UPDATE_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 1-2.5-5.8M20 4v6h-6"/></svg>"#;
+static UPDATE_HANDLE: LazyLock<svg::Handle> = LazyLock::new(|| svg::Handle::from_memory(UPDATE_SVG));
+const STAR_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="m12 2.5 2.9 6.1 6.7 1-4.8 4.7 1.1 6.7-5.9-3.2-5.9 3.2 1.1-6.7-4.8-4.7 6.7-1z"/></svg>"#;
+static STAR_HANDLE: LazyLock<svg::Handle> = LazyLock::new(|| svg::Handle::from_memory(STAR_SVG));
+const STAR_FILLED_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="m12 2.5 2.9 6.1 6.7 1-4.8 4.7 1.1 6.7-5.9-3.2-5.9 3.2 1.1-6.7-4.8-4.7 6.7-1z"/></svg>"#;
+static STAR_FILLED_HANDLE: LazyLock<svg::Handle> =
+   LazyLock::new(|| svg::Handle::from_memory(STAR_FILLED_SVG));
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SortChoice(Sort);
@@ -88,12 +95,14 @@ pub struct State {
    sort: SortChoice,
    compatible: bool,
    favorites_only: bool,
+   hide_installed: bool,
    pool: Option<Result<Vec<ModSummary>, String>>,
    pool_key: Option<PoolKey>,
    request: u64,
    results: Vec<usize>,
    shown: usize,
    installed: HashMap<String, String>,
+   updates: HashMap<String, Update>,
    logos: HashMap<String, Logo>,
    details: Option<Details>,
 }
@@ -106,12 +115,14 @@ impl Default for State {
          sort: SortChoice(Sort::Downloads),
          compatible: true,
          favorites_only: false,
+         hide_installed: false,
          pool: None,
          pool_key: None,
          request: 0,
          results: Vec::new(),
          shown: PAGE,
          installed: HashMap::new(),
+         updates: HashMap::new(),
          logos: HashMap::new(),
          details: None,
       }
@@ -125,13 +136,16 @@ pub enum Message {
    Sort(SortChoice),
    Compatible(bool),
    FavoritesOnly(bool),
+   HideInstalled(bool),
    Refresh,
    PoolLoaded(u64, PoolKey, Result<Vec<ModSummary>, String>),
    Installed(Option<String>, Result<HashMap<String, String>, String>),
+   Updates(Option<String>, Result<HashMap<String, Update>, String>),
    Logo(String, Option<Vec<u8>>),
    More,
    Favorite(String),
    FavoriteSaved(Result<(), String>),
+   Update(String),
    Install(String, Option<String>),
    OpenDetails(usize),
    DetailsLoaded(i64, Result<Box<ModDetails>, String>),
@@ -157,18 +171,44 @@ pub fn refresh_installed(state: &State, shared: &Shared) -> Task<AppMessage> {
       return Task::none();
    };
    let lithic = shared.lithic.clone();
-   let target = Some(id.clone());
-   Task::perform(
-      blocking(move || {
-         let instance = lithic.instance(&id)?;
-         Ok(lithic
-            .installed_mods(&instance)?
-            .into_iter()
-            .map(|m| (m.info.mod_id, m.info.version))
-            .collect())
-      }),
-      move |r| AppMessage::Browse(Message::Installed(target, r)),
-   )
+   let reader = lithic.clone();
+   let installed_target = Some(id.clone());
+   let update_id = id.clone();
+   let updates_target = Some(id.clone());
+   let update_reader = lithic.clone();
+   Task::batch([
+      Task::perform(
+         blocking(move || {
+            let instance = reader.instance(&id)?;
+            Ok(reader
+               .installed_mods(&instance)?
+               .into_iter()
+               .map(|m| (m.info.mod_id, m.info.version))
+               .collect())
+         }),
+         move |r| AppMessage::Browse(Message::Installed(installed_target, r)),
+      ),
+      Task::perform(
+         async move {
+            let instance = blocking(move || update_reader.instance(&update_id)).await?;
+            let updates = lithic
+               .check_updates(&instance, &Cancel::new())
+               .await
+               .map_err(|e| e.to_string())?
+               .into_iter()
+               .filter(|u| {
+                  u.release
+                     .version
+                     .as_deref()
+                     .is_some_and(|v| version::compare(v, &u.installed).is_gt())
+               })
+               .map(|u| (u.mod_id.clone(), u))
+               .collect();
+            Ok(updates)
+         },
+         move |r| AppMessage::Browse(Message::Updates(updates_target, r)),
+      ),
+   ])
 }
 
 impl State {
@@ -187,6 +227,7 @@ impl State {
       self.target = id;
       self.sync_target(shared);
       self.installed.clear();
+      self.updates.clear();
    }
 
    fn target_id<'a>(&'a self, shared: &'a Shared) -> Option<&'a str> {
@@ -226,6 +267,9 @@ impl State {
          .into_iter()
          .filter(|&i| !pool[i].mod_ids.is_empty())
          .filter(|&i| !self.favorites_only || pool[i].mod_ids.iter().any(|id| favorites.contains(id)))
+         .filter(|&i| {
+            !self.hide_installed || !pool[i].mod_ids.iter().any(|id| self.installed.contains_key(id))
+         })
          .collect();
       self.shown = PAGE;
    }
@@ -271,6 +315,11 @@ impl State {
          }
          Message::FavoritesOnly(on) => {
             self.favorites_only = on;
+            self.rerank(shared);
+            return self.load_logos(shared);
+         }
+         Message::HideInstalled(on) => {
+            self.hide_installed = on;
             self.rerank(shared);
             return self.load_logos(shared);
          }
@@ -329,8 +378,24 @@ impl State {
                return Task::none();
             }
             match result {
-               Ok(map) => self.installed = map,
+               Ok(installed) => {
+                  self.installed = installed;
+                  self
+                     .updates
+                     .retain(|id, update| self.installed.get(id) == Some(&update.installed));
+                  self.rerank(shared);
+                  return self.load_logos(shared);
+               }
                Err(e) => return shared.toasts.error(t("browse-installed-failed"), Some(e)),
+            }
+         }
+         Message::Updates(target, result) => {
+            if target.as_deref() != self.target_id(shared) {
+               return Task::none();
+            }
+            match result {
+               Ok(updates) => self.updates = updates,
+               Err(e) => return shared.toasts.error(t("instance-update-check-failed"), Some(e)),
             }
          }
          Message::Logo(url, bytes) => {
@@ -388,6 +453,32 @@ impl State {
                   };
                   lithic
                      .install_mods(&instance, &refs, &opts)
+                     .await
+                     .map(|r| Outcome::Mods(Summary::from(&r)))
+                     .map_err(|e| e.to_string())
+               },
+            );
+         }
+         Message::Update(mod_id) => {
+            let Some(target) = self.target_id(shared).map(ToString::to_string) else {
+               return shared.toasts.warning(t("browse-no-instance"));
+            };
+            let Some(update) = self.updates.get(&mod_id).cloned() else {
+               return Task::none();
+            };
+            return shared.start_op(
+               target.clone(),
+               OpKind::Update,
+               move |lithic, reporter, cancel| async move {
+                  let instance = lithic.instance(&target).map_err(|e| e.to_string())?;
+                  let opts = InstallOptions {
+                     dependencies: true,
+                     reporter,
+                     cancel,
+                     ..InstallOptions::default()
+                  };
+                  lithic
+                     .update_mods(&instance, &[update], &opts)
                      .await
                      .map(|r| Outcome::Mods(Summary::from(&r)))
                      .map_err(|e| e.to_string())
@@ -485,6 +576,9 @@ impl State {
             toggler(self.favorites_only)
                .label(t("browse-favorites-only"))
                .on_toggle(Message::FavoritesOnly),
+            toggler(self.hide_installed)
+               .label(t("browse-hide-installed"))
+               .on_toggle(Message::HideInstalled),
          ]
          .spacing(24)
          .align_y(Center),
@@ -512,7 +606,7 @@ impl State {
                row![
                   text(t("browse-mod-heading")).width(Fill),
                   text(t("browse-downloads-heading")).width(76),
-                  space().width(128),
+                  space().width(152),
                ]
                .spacing(12),
             )
@@ -578,60 +672,102 @@ impl State {
    ) -> Element<'a, Message> {
       let mod_id = m.mod_ids.first().cloned().unwrap_or_default();
       let installed = m.mod_ids.iter().find_map(|id| self.installed.get(id));
+      let update = m.mod_ids.iter().find_map(|id| self.updates.get(id));
       let favorite = m
          .mod_ids
          .iter()
          .any(|id| shared.settings.gui.favorites.contains(id));
 
       let mut meta = t1("browse-by", "author", m.author.clone());
-      if favorite {
-         meta.push_str("  |  ");
-         meta.push_str(&t("browse-favorite"));
-      }
       if let Some(version) = installed {
          meta.push_str("  |  ");
          meta.push_str(&t1("browse-installed", "version", version.clone()));
+         if update.is_some() {
+            meta.push_str("  |  ");
+            meta.push_str(&t("browse-update-available"));
+         }
       }
       if let Some(side) = m.side.as_deref().filter(|s| *s != "both") {
          meta.push_str("  |  ");
          meta.push_str(&t1("browse-side", "side", side.to_string()));
       }
 
-      let can_install = !busy && self.target_id(shared).is_some();
-      let action: Element<Message> = match installed {
-         Some(_) => space().width(36).height(36).into(),
-         None => tooltip(
-            button(
-               svg((*INSTALL_HANDLE).clone())
-                  .width(20)
-                  .height(20)
-                  .style(move |theme: &Theme, _| {
-                     let p = theme.extended_palette();
-                     let text = p.background.base.text;
-                     let color = if can_install {
-                        text
-                     } else {
-                        let bg = p.background.weakest.color;
-                        Color::from_rgb(
-                           bg.r.mul_add(0.65, text.r * 0.35),
-                           bg.g.mul_add(0.65, text.g * 0.35),
-                           bg.b.mul_add(0.65, text.b * 0.35),
-                        )
-                     };
-                     svg::Style { color: Some(color) }
-                  }),
-            )
-            .width(36)
-            .height(36)
-            .padding(8)
-            .style(style::nav(false))
-            .on_press_maybe(can_install.then(|| Message::Install(mod_id.clone(), None))),
-            text(t("browse-install")).size(13),
-            tooltip::Position::Top,
-         )
-         .style(container::rounded_box)
-         .into(),
+      let can_act = !busy && self.target_id(shared).is_some() && (installed.is_none() || update.is_some());
+      let icon = if update.is_some() {
+         (*UPDATE_HANDLE).clone()
+      } else {
+         (*INSTALL_HANDLE).clone()
       };
+      let label = match (installed, update) {
+         (Some(_), Some(u)) => t1(
+            "browse-update-to",
+            "version",
+            u.release.version.clone().unwrap_or_default(),
+         ),
+         (Some(_), None) => t("mods-already-installed"),
+         (None, _) => t("browse-install"),
+      };
+      let action: Element<Message> = tooltip(
+         button(svg(icon).width(20).height(20).style(move |theme: &Theme, _| {
+            let p = theme.extended_palette();
+            let text = p.background.base.text;
+            let color = if can_act {
+               text
+            } else {
+               let bg = p.background.weakest.color;
+               Color::from_rgb(
+                  bg.r.mul_add(0.65, text.r * 0.35),
+                  bg.g.mul_add(0.65, text.g * 0.35),
+                  bg.b.mul_add(0.65, text.b * 0.35),
+               )
+            };
+            svg::Style { color: Some(color) }
+         }))
+         .width(36)
+         .height(36)
+         .padding(8)
+         .style(style::nav(false))
+         .on_press_maybe(can_act.then(|| {
+            update.map_or_else(
+               || Message::Install(mod_id.clone(), None),
+               |u| Message::Update(u.mod_id.clone()),
+            )
+         })),
+         text(label).size(13),
+         tooltip::Position::Top,
+      )
+      .style(container::rounded_box)
+      .into();
+      let star = if favorite {
+         (*STAR_FILLED_HANDLE).clone()
+      } else {
+         (*STAR_HANDLE).clone()
+      };
+      let favorite_action = tooltip(
+         button(svg(star).width(20).height(20).style(move |theme: &Theme, _| {
+            let p = theme.extended_palette();
+            svg::Style {
+               color: Some(if favorite {
+                  p.warning.base.color
+               } else {
+                  p.background.base.text
+               }),
+            }
+         }))
+         .width(36)
+         .height(36)
+         .padding(8)
+         .style(style::nav(false))
+         .on_press(Message::Favorite(mod_id)),
+         text(t(if favorite {
+            "browse-unfavorite"
+         } else {
+            "browse-favorite"
+         }))
+         .size(13),
+         tooltip::Position::Top,
+      )
+      .style(container::rounded_box);
 
       container(
          row![
@@ -655,10 +791,11 @@ impl State {
                   .style(button::text)
                   .on_press(Message::OpenDetails(index)),
                action,
+               favorite_action,
             ]
             .spacing(8)
             .align_y(Center)
-            .width(Length::Fixed(128.0)),
+            .width(Length::Fixed(152.0)),
          ]
          .spacing(12)
          .align_y(Center),
@@ -672,10 +809,6 @@ impl State {
    fn details_view<'a>(&'a self, d: &'a Details, shared: &'a Shared, busy: bool) -> Element<'a, Message> {
       let m = &d.summary;
       let mod_id = m.mod_ids.first().cloned().unwrap_or_default();
-      let favorite = m
-         .mod_ids
-         .iter()
-         .any(|id| shared.settings.gui.favorites.contains(id));
       let header = row![
          self.logo(m.logo.as_ref(), 72.0),
          column![
@@ -687,13 +820,6 @@ impl State {
          ]
          .spacing(4)
          .width(Fill),
-         button(text(if favorite {
-            t("browse-unfavorite")
-         } else {
-            t("browse-favorite")
-         }))
-         .style(button::secondary)
-         .on_press(Message::Favorite(mod_id.clone())),
       ]
       .spacing(14)
       .align_y(Center);
@@ -706,22 +832,43 @@ impl State {
                game_version: self.target_game(shared).map(ToString::to_string),
                allow_prerelease: shared.settings.mods.allow_prerelease,
             };
+            let installed = m.mod_ids.iter().find_map(|id| self.installed.get(id));
+            let update = m.mod_ids.iter().find_map(|id| self.updates.get(id));
             let recommended = pick_release(details, &target, None);
             let verdict: Element<Message> = match &recommended {
                Ok(r) => row![
-                  text(t1(
-                     "browse-would-install",
-                     "version",
-                     r.version.clone().unwrap_or_default()
-                  ))
-                  .width(Fill),
-                  button(text(t("browse-install")))
-                     .padding([6, 14])
-                     .style(button::primary)
-                     .on_press_maybe(
-                        (!busy && self.target_id(shared).is_some())
-                           .then(|| Message::Install(mod_id.clone(), None)),
+                  text(match installed {
+                     Some(v) if update.is_some() => format!(
+                        "{}  |  {}",
+                        t1("browse-installed", "version", v.clone()),
+                        t("browse-update-available"),
                      ),
+                     Some(v) => t1("browse-installed", "version", v.clone()),
+                     None => t1(
+                        "browse-would-install",
+                        "version",
+                        r.version.clone().unwrap_or_default(),
+                     ),
+                  })
+                  .width(Fill),
+                  button(text(if update.is_some() {
+                     t("instance-update")
+                  } else if installed.is_some() {
+                     t("mods-already-installed")
+                  } else {
+                     t("browse-install")
+                  }))
+                  .padding([6, 14])
+                  .style(button::primary)
+                  .on_press_maybe(
+                     (!busy && self.target_id(shared).is_some() && (installed.is_none() || update.is_some()))
+                        .then(|| {
+                           update.map_or_else(
+                              || Message::Install(mod_id.clone(), None),
+                              |u| Message::Update(u.mod_id.clone()),
+                           )
+                        }),
+                  ),
                ]
                .align_y(Center)
                .into(),
@@ -894,6 +1041,26 @@ mod tests {
       let _ = s.update(Message::Favorite("m7".into()), &mut shared);
       let _ = s.update(Message::FavoritesOnly(true), &mut shared);
       assert_eq!(s.results, [7]);
+   }
+
+   #[test]
+   fn hide_installed_restores_results() {
+      let (_dir, mut shared) = shared();
+      let mut state = State {
+         pool: Some(Ok(vec![
+            summary(1, "Installed", "installed", 2),
+            summary(2, "Available", "available", 1),
+         ])),
+         ..State::default()
+      };
+      state.installed.insert("installed".into(), "1.0".into());
+      state.rerank(&shared);
+      assert_eq!(state.results, [0, 1]);
+
+      let _ = state.update(Message::HideInstalled(true), &mut shared);
+      assert_eq!(state.results, [1]);
+      let _ = state.update(Message::HideInstalled(false), &mut shared);
+      assert_eq!(state.results, [0, 1]);
    }
 
    #[test]
