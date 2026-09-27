@@ -1,5 +1,6 @@
 {
   lib,
+  makeWrapper,
   craneLib,
   clang,
   libclang,
@@ -13,11 +14,15 @@
   libxcursor,
   libxi,
   libxrandr,
-  makeWrapper,
+  # Dotnet wrapper
+  dotnetCorePackages,
+  dotnet-runtime_8,
+  dotnet-runtime_10,
 }: let
   cargoTOML = (lib.importTOML ../Cargo.toml).workspace.package;
   pname = "lithic";
   version = cargoTOML.version;
+  dotnet = dotnetCorePackages.combinePackages [dotnet-runtime_10 dotnet-runtime_8];
 
   # winit loads the windowing libraries at runtime, so they have to be on the
   # library path for both Wayland and X11 sessions.
@@ -88,7 +93,9 @@ in
       postFixup = ''
         for bin in $out/bin/*; do
           wrapProgram "$bin" \
-            --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath runtimeInputs}
+            --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath runtimeInputs} \
+            --set DOTNET_ROOT ${dotnet}/share/dotnet \
+            --prefix PATH : ${lib.makeBinPath [dotnet]}
         done
       '';
 
