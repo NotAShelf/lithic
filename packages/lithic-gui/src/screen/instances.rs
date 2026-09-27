@@ -43,7 +43,7 @@ pub fn game_choices(shared: &Shared) -> Vec<GameChoice> {
       .iter()
       .map(|i| GameChoice {
          version: i.version.clone(),
-         installed: true,
+         installed: i.is_available(),
       })
       .collect();
    if let Some(manifest) = &shared.manifest {
@@ -330,7 +330,7 @@ fn instance_row<'a>(instance: &'a Instance, shared: &'a Shared) -> Element<'a, M
    let missing_game = instance
       .game_version
       .as_deref()
-      .is_some_and(|v| !shared.installs.iter().any(|i| i.version == v));
+      .is_some_and(|v| !shared.installs.iter().any(|i| i.version == v && i.is_available()));
    if missing_game {
       title = title.push(widget::badge(t("instances-game-missing"), Tone::Bad));
    }
@@ -443,6 +443,8 @@ fn create_dialog<'a>(form: &'a CreateForm, shared: &'a Shared) -> Element<'a, Me
    reason = "test setup and assertions intentionally fail on error"
 )]
 mod tests {
+   use std::fs;
+
    use super::*;
    use lithic_core::game::{Install, Manifest};
    use lithic_core::{Lithic, Paths};
@@ -473,11 +475,19 @@ mod tests {
    }
 
    #[test]
-   fn installed_versions_come_first() {
-      let (_d, mut shared) = shared();
+   fn installed_versions_come_first_and_missing_executables_are_unavailable() {
+      let (d, mut shared) = shared();
+      let game = d.path().join("game");
+      fs::create_dir(&game).unwrap();
+      let executable = game.join(if cfg!(windows) {
+         "Vintagestory.exe"
+      } else {
+         "Vintagestory"
+      });
+      fs::write(&executable, "").unwrap();
       shared.installs.push(Install {
          version: "1.21.5".into(),
-         path: "/x".into(),
+         path: game,
          managed: true,
       });
       let manifest = Manifest::parse(
@@ -493,5 +503,10 @@ mod tests {
          .map(|c| (c.version.as_str(), c.installed))
          .collect();
       assert_eq!(versions, [("1.21.5", true), ("1.22.7", false)]);
+
+      fs::remove_file(executable).unwrap();
+      let choices = game_choices(&shared);
+      assert_eq!(choices[0].version, "1.21.5");
+      assert!(!choices[0].installed);
    }
 }

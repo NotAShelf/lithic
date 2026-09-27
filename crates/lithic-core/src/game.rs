@@ -182,6 +182,14 @@ pub struct Install {
    pub managed: bool,
 }
 
+impl Install {
+   /// Whether this registered build still has a game executable.
+   #[must_use]
+   pub fn is_available(&self) -> bool {
+      find_executable(&self.path).is_some()
+   }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct Registry {
    #[serde(default, rename = "install")]
@@ -298,35 +306,14 @@ impl Lithic {
    }
 
    /// Unregisters a build. Files are deleted only for builds lithic
-   /// installed itself. Refuses while an instance uses the version.
+   /// installed itself. Instances using the build are kept, but cannot launch
+   /// until the version is installed again.
    ///
    /// # Errors
-   /// Returns an error if the version is absent or in use, registry access
-   /// fails, or managed build files cannot be removed.
+   /// Returns an error if the version is absent, registry access fails, or
+   /// managed build files cannot be removed.
    pub fn remove_game_install(&self, version: &str) -> Result<()> {
       let install = self.game_install(version)?;
-      let users: Vec<String> = self
-         .list_instances()?
-         .instances
-         .into_iter()
-         .filter(|i| {
-            i.game_version
-               .as_deref()
-               .is_some_and(|v| v.eq_ignore_ascii_case(&install.version))
-         })
-         .map(|i| i.name)
-         .collect();
-      if !users.is_empty() {
-         return Err(Error::InUse {
-            what: format!("game version {}", install.version),
-            users,
-         });
-      }
-      fsutil::update_toml(&self.paths.game_registry_file(), |r: &mut Registry| {
-         r.installs
-            .retain(|i| !i.version.eq_ignore_ascii_case(&install.version));
-         Ok(())
-      })?;
       if install.managed {
          let root = self.game_root()?;
          if let Some(top) = install
@@ -345,7 +332,11 @@ impl Lithic {
             }
          }
       }
-      Ok(())
+      fsutil::update_toml(&self.paths.game_registry_file(), |r: &mut Registry| {
+         r.installs
+            .retain(|i| !i.version.eq_ignore_ascii_case(&install.version));
+         Ok(())
+      })
    }
 
    /// Downloads, verifies and unpacks a client build for this machine.
@@ -634,13 +625,56 @@ mod tests {
          ..Default::default()
       })
       .unwrap();
-      assert!(matches!(
-         l.remove_game_install("1.21.5"),
-         Err(Error::InUse { .. })
-      ));
-      l.delete_instance("uses-it").unwrap();
       l.remove_game_install("1.21.5").unwrap();
       assert!(external.is_dir(), "external installs are never deleted");
       assert!(l.game_installs().unwrap().is_empty());
+      assert!(l.instance("uses-it").is_ok(), "removal keeps dependent instances");
+      assert!(l.launch_spec(&l.instance("uses-it").unwrap()).is_err());
+   }
+
+   #[test]
+   fn managed_install_removal_deletes_build_but_keeps_instance() {
+      let d = tempfile::tempdir().unwrap();
+      let l = Lithic::new(crate::Paths::rooted(d.path())).unwrap();
+      let build = l.game_root().unwrap().join("1.21.5");
+      let game = build.join("vintagestory");
+      fs::create_dir_all(&game).unwrap();
+      fs::write(
+         game.join(if cfg!(windows) {
+            "Vintagestory.exe"
+         } else {
+            "Vintagestory"
+         }),
+         "",
+      )
+      .unwrap();
+      l.register(Install {
+         version: "1.21.5".into(),
+         path: game,
+         managed: true,
+      })
+      .unwrap();
+      let instance = l
+         .create_instance(NewInstance {
+            name: "uses it".into(),
+            game_version: Some("1.21.5".into()),
+            ..Default::default()
+         })
+         .unwrap();
+
+      l.remove_game_install("1.21.5").unwrap();
+      assert!(!build.exists(), "the entire managed build is removed");
+      assert!(l.game_installs().unwrap().is_empty());
+      assert_eq!(
+         l.instance(&instance.id).unwrap().game_version.as_deref(),
+         Some("1.21.5")
+      );
+      assert!(matches!(
+         l.launch_spec(&instance),
+         Err(Error::NotFound {
+            kind: Kind::GameVersion,
+            ..
+         })
+      ));
    }
 }
