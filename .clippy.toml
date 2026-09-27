@@ -1,3 +1,12 @@
-allow-expect-in-consts   = false
-allow-unwrap-in-consts   = false
-too-many-lines-threshold = 200
+# Process spawning is banned by default.
+disallowed-methods = [ { path = "std::process::Command::new", reason = "Don't" } ]
+
+# Keep version-sensitive suggestions aligned with the workspace MSRV.
+msrv = "1.97.1"
+
+allow-expect-in-consts         = false
+allow-unwrap-in-consts         = false
+cognitive-complexity-threshold = 25
+excessive-nesting-threshold    = 7
+too-many-arguments-threshold   = 7
+too-many-lines-threshold       = 150
