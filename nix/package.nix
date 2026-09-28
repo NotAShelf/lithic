@@ -1,5 +1,6 @@
 {
   lib,
+  stdenv,
   makeWrapper,
   craneLib,
   clang,
@@ -23,11 +24,12 @@
   dotnetCorePackages,
   dotnet-runtime_8,
   dotnet-runtime_10,
+  # Options
+  withMold ? stdenv.hostPlatform.isLinux,
 }: let
   cargoTOML = (lib.importTOML ../Cargo.toml).workspace.package;
   pname = "lithic";
   version = cargoTOML.version;
-  dotnet = dotnetCorePackages.combinePackages [dotnet-runtime_10 dotnet-runtime_8];
 
   # winit loads windowing libraries at runtime; Vintage Story and its crash
   # reporter also load graphics and audio libraries from the inherited path.
@@ -47,31 +49,33 @@
   ];
 
   buildInputs = runtimeInputs ++ [openssl.dev];
-  nativeBuildInputs = [
-    clang
-    mold
-    pkg-config
-    makeWrapper
-  ];
+  nativeBuildInputs =
+    [
+      pkg-config
+      makeWrapper
+    ]
+    ++ lib.optionals withMold [
+      clang
+      mold
+    ];
 
   depsSrc = craneLib.cleanCargoSource ../.;
+
   commonArgs = {
     inherit pname version buildInputs nativeBuildInputs;
     strictDeps = true;
     doCheck = false;
     src = depsSrc;
 
-    env = {
+    env = lib.optionalAttrs withMold {
       LIBCLANG_PATH = lib.makeLibraryPath [libclang.lib];
     };
   };
 
-  # Pre-build all external deps, this derivation is cached across source changes
+  # Pre-build external dependencies from Crane's manifest-only dummy source.
   cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
-  # Build source that includes locale '.ftl' files required by lithic-locale's
-  # include_str! macros. We keep them out of depsSrc so that touching a
-  # translation does not invalidate the cargoArtifacts cache.
+  # Keep locale files for include_str! and Cargo config consistent with depsSrc.
   buildSrc = let
     fs = lib.fileset;
     s = ../.;
@@ -79,7 +83,7 @@
     fs.toSource {
       root = s;
       fileset = fs.unions [
-        (fs.fileFilter (file: builtins.any file.hasExt ["ftl"]) (s + /crates))
+        (s + /.cargo)
         (s + /crates)
         (s + /packages)
         (s + /Cargo.toml)
@@ -100,7 +104,9 @@ in
           --replace-fail "Exec=lithic %u" "Exec=$out/bin/lithic %u"
       '';
 
-      postFixup = ''
+      postFixup = let
+        dotnet = dotnetCorePackages.combinePackages [dotnet-runtime_10 dotnet-runtime_8];
+      in ''
         for bin in $out/bin/*; do
           wrapProgram "$bin" \
             --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath runtimeInputs} \
