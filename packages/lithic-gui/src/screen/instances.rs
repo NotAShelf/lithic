@@ -5,7 +5,7 @@ use iced::{
   Element,
   Fill,
   Task,
-  widget::{button, column, pick_list, row, scrollable, text, text_input},
+  widget::{button, column, row, scrollable, text},
 };
 use lithic_core::{
   Instance,
@@ -256,13 +256,19 @@ impl State {
 
   pub fn view<'a>(&'a self, shared: &'a Shared) -> Element<'a, Message> {
     let actions = row![
-      widget::secondary(t("instances-import"), Some(Message::Import)),
-      button(text(t("instances-new")))
-        .padding([8, 16])
-        .style(button::primary)
-        .on_press(Message::OpenCreate),
+      widget::secondary_icon(
+        Icon::Import,
+        t("instances-import"),
+        Some(Message::Import)
+      ),
+      widget::primary_icon(
+        Icon::Plus,
+        t("instances-new"),
+        Some(Message::OpenCreate)
+      ),
     ]
-    .spacing(8);
+    .spacing(8)
+    .align_y(Center);
 
     let importing: Vec<Element<Message>> = shared
       .busy
@@ -294,12 +300,11 @@ impl State {
       widget::loading(t("loading"))
     } else if shared.instances.is_empty() {
       let adopt = stock_game_data_dirs().into_iter().next();
-      let mut buttons = row![
-        button(text(t("instances-new")))
-          .padding([8, 16])
-          .style(button::primary)
-          .on_press(Message::OpenCreate)
-      ]
+      let mut buttons = row![widget::primary_icon(
+        Icon::Plus,
+        t("instances-new"),
+        Some(Message::OpenCreate)
+      )]
       .spacing(8);
       if let Some(dir) = adopt {
         buttons = buttons.push(widget::secondary(
@@ -426,14 +431,14 @@ fn instance_row<'a>(
         title,
         text(details.join("  |  ")).size(13).style(style::muted)
       ]
-      .spacing(6)
+      .spacing(4)
       .width(Fill),
       play,
     ]
     .spacing(12)
     .align_y(Center),
   )
-  .padding(14)
+  .padding([10, 14])
   .width(Fill)
   .style(style::row_card)
   .on_press(Message::Open(id))
@@ -451,18 +456,20 @@ fn create_dialog<'a>(
     .map_or_else(|| t("instances-data-default"), |d| d.display().to_string());
   let mut data_row = row![
     text(data_label).size(13).width(Fill),
-    button(text(t("common-choose-folder")).size(13))
-      .style(button::secondary)
-      .on_press(Message::PickDataDir),
+    widget::secondary_icon(
+      Icon::Folder,
+      t("common-choose-folder"),
+      Some(Message::PickDataDir)
+    ),
   ]
   .spacing(8)
   .align_y(Center);
   if form.data_dir.is_some() {
-    data_row = data_row.push(
-      button(text(t("common-reset")).size(13))
-        .style(button::text)
-        .on_press(Message::DataDir(None)),
-    );
+    data_row = data_row.push(widget::icon_button(
+      Icon::Close,
+      t("common-reset"),
+      Some(Message::DataDir(None)),
+    ));
   }
 
   let game_hint = match &form.game {
@@ -478,7 +485,7 @@ fn create_dialog<'a>(
   let mut body = column![
     widget::field(
       t("instances-name"),
-      text_input(&t("instances-name-placeholder"), &form.name)
+      widget::input(&t("instances-name-placeholder"), &form.name)
         .on_input(Message::Name)
         .on_submit(Message::Create)
         .padding(8),
@@ -486,7 +493,7 @@ fn create_dialog<'a>(
     ),
     widget::field(
       t("instances-game-version"),
-      pick_list(choices, form.game.clone(), Message::Game)
+      widget::select(choices, form.game.clone(), Message::Game)
         .placeholder(t("instances-pick-game")),
       game_hint
     ),
@@ -505,7 +512,7 @@ fn create_dialog<'a>(
     t("instances-create-title"),
     body,
     row![
-      widget::secondary(t("common-cancel"), Some(Message::CloseCreate)),
+      widget::ghost(t("common-cancel"), Some(Message::CloseCreate)),
       widget::action(
         t("instances-create"),
         t("instances-creating"),
