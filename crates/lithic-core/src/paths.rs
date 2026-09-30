@@ -65,6 +65,12 @@ impl Paths {
     self.config.join("sessions")
   }
 
+  /// Game settings files that may still hold a session lithic has to remove.
+  #[must_use]
+  pub fn session_cleanup_file(&self) -> PathBuf {
+    self.config.join("session-cleanup.toml")
+  }
+
   /// The pre-2.0 single-file configuration.
   #[must_use]
   pub fn legacy_config_file(&self) -> PathBuf {

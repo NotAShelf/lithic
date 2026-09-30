@@ -43,7 +43,7 @@ pub async fn launch(ctx: &Ctx, args: LaunchArgs) -> Result {
     return Ok(());
   }
 
-  let (session, waiter) = ctx.lithic.launch(&instance)?;
+  let (session, waiter) = ctx.lithic.launch(&instance).await?;
   let pid = session
     .pid
     .map(|p| format!(" (pid {p})"))
