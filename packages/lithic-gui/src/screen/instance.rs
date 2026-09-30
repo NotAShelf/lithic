@@ -32,6 +32,7 @@ use lithic_core::{
   mods::{self, InstallOptions, InstalledMod, ModRef, Problem, Update},
   pack::ExportOptions,
 };
+use lithic_icons::Icon;
 
 use super::{
   browse,
@@ -44,7 +45,6 @@ use super::{
 use crate::{
   app::{Message as AppMessage, OpKind, Outcome, Page, Shared, Summary},
   i18n::{t, t1, t2},
-  icon::Icon,
   style::{self, Kind, Tone},
   task::{blocking, pick_folder, save_pack},
   widget,

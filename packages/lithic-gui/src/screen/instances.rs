@@ -14,12 +14,12 @@ use lithic_core::{
   mods::InstallOptions,
   paths::stock_game_data_dirs,
 };
+use lithic_icons::Icon;
 
 use super::{format_duration, format_time};
 use crate::{
   app::{Message as AppMessage, OpKind, Outcome, Page, Shared, Summary},
   i18n::{t, t1, t2},
-  icon::Icon,
   style::{self, Kind, Tone},
   task::{blocking, pick_folder, pick_pack},
   widget,

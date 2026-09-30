@@ -40,12 +40,12 @@ use lithic_core::{
   launch::{Exit, Session},
   mods::{Change, InstallOptions, ModRef, Report},
 };
+use lithic_icons::{self as icon, Icon};
 use native_theme_iced::from_system;
 use tokio::task::spawn_blocking;
 
 use crate::{
   i18n::{t, t1, t2},
-  icon::{self, Icon},
   notify::{self, Notifications},
   screen::{accounts, browse, game, instance, instances, settings},
   style,

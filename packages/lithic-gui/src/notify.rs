@@ -10,12 +10,12 @@ use iced::{
   Task,
   widget::{column, container, row, text},
 };
+use lithic_icons::Icon;
 use tokio::time::sleep;
 
 use crate::{
   app::Message as AppMessage,
   i18n::t,
-  icon::Icon,
   style::{self, Tone},
   widget,
 };

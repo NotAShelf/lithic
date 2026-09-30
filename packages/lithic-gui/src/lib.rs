@@ -1,6 +1,5 @@
 mod app;
 mod i18n;
-mod icon;
 mod notify;
 mod screen;
 mod style;

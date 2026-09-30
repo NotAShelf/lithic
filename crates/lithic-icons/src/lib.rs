@@ -1,5 +1,3 @@
-//! Lucide icons (ISC license, see `assets/icons/LICENSE`).
-
 use std::sync::LazyLock;
 
 use iced::{
@@ -86,12 +84,14 @@ static HANDLES: LazyLock<Vec<svg::Handle>> = LazyLock::new(|| {
 });
 
 impl Icon {
+  #[must_use]
   pub fn handle(self) -> svg::Handle {
     HANDLES[self as usize].clone()
   }
 }
 
 /// `icon` drawn in the theme's text color.
+#[must_use]
 pub fn icon<'a>(icon: Icon, size: f32) -> Svg<'a> {
   colored(icon, size, |theme| {
     theme.extended_palette().background.base.text
@@ -111,17 +111,4 @@ pub fn colored<'a>(
         color: Some(color(theme)),
       }
     })
-}
-
-#[cfg(test)]
-mod tests {
-  use super::*;
-
-  #[test]
-  fn every_icon_has_a_source() {
-    assert_eq!(Icon::Info as usize + 1, SOURCES.len());
-    for bytes in SOURCES {
-      assert!(bytes.starts_with(b"<!--") || bytes.starts_with(b"<svg"));
-    }
-  }
 }

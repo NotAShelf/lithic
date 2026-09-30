@@ -32,12 +32,12 @@ use lithic_core::{
   },
   version,
 };
+use lithic_icons::{self as icon, Icon};
 
 use super::format_count;
 use crate::{
   app::{Message as AppMessage, OpKind, Outcome, Shared, Summary},
   i18n::{t, t1, t2},
-  icon::{self, Icon},
   style::{self, Kind, Tone},
   task::blocking,
   widget,

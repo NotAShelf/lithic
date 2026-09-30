@@ -27,10 +27,10 @@ use iced::{
     tooltip,
   },
 };
+use lithic_icons::{self as icon, Icon};
 
 use crate::{
   i18n::t,
-  icon::{self, Icon},
   style::{self, Kind, Tone},
 };
 
