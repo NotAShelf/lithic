@@ -103,7 +103,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: archives/*
-          draft: true
+          draft: false
           prerelease: false
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
