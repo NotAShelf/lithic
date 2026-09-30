@@ -142,7 +142,7 @@ pub enum Problem {
 /// Holds `<instance>/.operation.lock` for the duration of a change to an
 /// instance's mods, so two installs cannot interleave.
 pub(crate) struct OperationLock {
-  _file: fs::File,
+  file: fs::File,
 }
 
 impl OperationLock {
@@ -155,12 +155,19 @@ impl OperationLock {
       .open(&path)
       .at(&path)?;
     match file.try_lock() {
-      Ok(()) => Ok(Self { _file: file }),
+      Ok(()) => Ok(Self { file }),
       Err(fs::TryLockError::WouldBlock) => {
         Err(Error::Busy(instance.name.clone()))
       },
       Err(fs::TryLockError::Error(e)) => Err(Error::io(&path, e)),
     }
+  }
+}
+
+// See `FileLock`: closing alone can leave the lock held by a forked child.
+impl Drop for OperationLock {
+  fn drop(&mut self) {
+    let _ = self.file.unlock();
   }
 }
 

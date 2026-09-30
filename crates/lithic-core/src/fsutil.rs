@@ -132,7 +132,7 @@ pub fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
 /// read-modify-write of a shared file goes through one of these, so the GUI and
 /// CLI can run at the same time without losing each other's changes.
 pub struct FileLock {
-  _file: File,
+  file: File,
 }
 
 impl FileLock {
@@ -150,7 +150,7 @@ impl FileLock {
       .open(&lock_path)
       .at(&lock_path)?;
     file.lock().at(&lock_path)?;
-    Ok(Self { _file: file })
+    Ok(Self { file })
   }
 
   /// `.<name>.lock` next to `path`.
@@ -160,6 +160,15 @@ impl FileLock {
     name.push(path.file_name().unwrap_or_default());
     name.push(".lock");
     path.with_file_name(name)
+  }
+}
+
+// Unlocking before the file closes matters: a child process forked on another
+// thread shares the descriptor until it execs, and closing ours alone would
+// leave the lock held by that copy.
+impl Drop for FileLock {
+  fn drop(&mut self) {
+    let _ = self.file.unlock();
   }
 }
 
