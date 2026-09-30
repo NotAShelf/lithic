@@ -341,8 +341,6 @@ enum Dialog {
 #[derive(Debug, Clone)]
 pub enum Message {
   Navigate(Page),
-  /// Opens Browse with mods going into this instance.
-  BrowseFor(String),
   Reload,
   Loaded(Result<Box<Snapshot>, String>),
   ReloadManifest,
@@ -468,7 +466,12 @@ impl App {
   fn enter(&mut self, page: &Page) -> Task<Message> {
     match page {
       Page::Browse => browse::enter(&self.browse, &self.shared),
-      Page::Instance(id) => instance::load_mods(&self.shared, id),
+      Page::Instance(_) => {
+        self
+          .instance
+          .as_ref()
+          .map_or_else(Task::none, |s| s.enter(&self.shared))
+      },
       Page::Accounts => self.accounts.enter(&self.shared),
       _ => Task::none(),
     }
@@ -485,11 +488,6 @@ impl App {
         let task = self.enter(&page);
         self.page = page;
         task
-      },
-      Message::BrowseFor(id) => {
-        self.browse.set_target(Some(id), &self.shared);
-        self.page = Page::Browse;
-        browse::enter(&self.browse, &self.shared)
       },
       Message::Reload => {
         let lithic = self.shared.lithic.clone();

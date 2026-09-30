@@ -121,6 +121,7 @@ instances-pick-data = Choose the game data folder
 instance-back = Back to instances
 instance-tab-mods = Mods
 instance-tab-mods-count = Mods ({ $count })
+instance-tab-browse = Browse
 instance-tab-logs = Logs
 instance-tab-settings = Settings
 instance-open-folder = Open folder
