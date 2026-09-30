@@ -57,6 +57,7 @@ use crate::{
   screen::{accounts, browse, game, instance, instances, settings},
   style,
   task::{blocking, open},
+  theme,
   widget,
 };
 
@@ -382,12 +383,13 @@ pub struct App {
   system_theme: Option<Theme>,
   /// Resolved once per settings or system change; building a preset theme
   /// is too slow to repeat on every frame.
-  theme:        Option<Theme>,
+  theme:        Theme,
   instances:    instances::State,
   instance:     Option<instance::State>,
   browse:       browse::State,
   games:        game::State,
   accounts:     accounts::State,
+  settings:     settings::State,
 }
 
 impl App {
@@ -416,12 +418,13 @@ impl App {
       queued_link,
       link_target: None,
       system_theme: None,
-      theme: None,
+      theme: theme::lithic(true),
       instances: instances::State::default(),
       instance: None,
       browse: browse::State::default(),
       games: game::State::default(),
       accounts: accounts::State::default(),
+      settings: settings::State::default(),
       shared,
     };
     app.refresh_theme();
@@ -447,7 +450,7 @@ impl App {
     }
   }
 
-  pub fn theme(&self) -> Option<Theme> {
+  pub fn theme(&self) -> Theme {
     self.theme.clone()
   }
 
@@ -726,7 +729,7 @@ impl App {
       Message::Games(m) => self.games.update(m, &mut self.shared),
       Message::Accounts(m) => self.accounts.update(m, &mut self.shared),
       Message::Settings(m) => {
-        let task = settings::update(m, &mut self.shared);
+        let task = self.settings.update(m, &mut self.shared);
         self.refresh_theme();
         task
       },
@@ -889,7 +892,7 @@ impl App {
       Page::Browse => self.browse.view(&self.shared).map(Message::Browse),
       Page::Games => self.games.view(&self.shared).map(Message::Games),
       Page::Accounts => self.accounts.view(&self.shared).map(Message::Accounts),
-      Page::Settings => settings::view(&self.shared).map(Message::Settings),
+      Page::Settings => self.settings.view(&self.shared).map(Message::Settings),
     };
 
     let layout =

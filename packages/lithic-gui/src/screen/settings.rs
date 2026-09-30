@@ -12,9 +12,10 @@ use iced::{
   widget::{
     button,
     column,
-    pick_list,
+    container,
     responsive,
     row,
+    rule,
     scrollable,
     space,
     text,
@@ -27,10 +28,14 @@ use native_theme_iced::{Theme as NativeTheme, from_preset};
 use crate::{
   app::{Message as AppMessage, Page, Shared},
   i18n::t,
+  icon::{self, Icon},
   style,
   task::{blocking, pick_folder},
+  theme,
   widget,
 };
+
+const CONTROL_WIDTH: f32 = 220.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThemeMode {
@@ -122,23 +127,46 @@ impl fmt::Display for StartPage {
   }
 }
 
-/// The theme for the current settings. `None` lets iced follow the system
-/// light or dark preference.
-pub fn resolve_theme(
-  gui: &GuiSettings,
-  system: Option<&Theme>,
-) -> Option<Theme> {
+/// The theme for the current settings. Without a known system preference,
+/// Lithic starts dark.
+pub fn resolve_theme(gui: &GuiSettings, system: Option<&Theme>) -> Theme {
+  let system_dark = system.is_none_or(|t| t.extended_palette().is_dark);
   match ThemeMode::from_key(&gui.theme_mode) {
-    ThemeMode::Light => Some(Theme::Light),
-    ThemeMode::Dark => Some(Theme::Dark),
+    ThemeMode::Light => theme::lithic(false),
+    ThemeMode::Dark => theme::lithic(true),
     ThemeMode::Preset => {
-      let dark = system.is_none_or(|t| t.extended_palette().is_dark);
-      from_preset(&gui.theme_preset, dark)
-        .map(|(theme, _)| theme)
-        .ok()
-        .or_else(|| system.cloned())
+      from_preset(&gui.theme_preset, system_dark)
+        .map_or_else(|_| theme::lithic(system_dark), |(theme, _)| theme)
     },
-    ThemeMode::System => system.cloned(),
+    ThemeMode::System => theme::lithic(system_dark),
+  }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Section {
+  #[default]
+  General,
+  Mods,
+  Storage,
+}
+
+impl Section {
+  const ALL: [Self; 3] = [Self::General, Self::Mods, Self::Storage];
+
+  fn label(self) -> String {
+    match self {
+      Self::General => t("settings-general"),
+      Self::Mods => t("settings-mods"),
+      Self::Storage => t("settings-storage"),
+    }
+  }
+
+  const fn icon(self) -> Icon {
+    match self {
+      Self::General => Icon::Settings,
+      Self::Mods => Icon::Instances,
+      Self::Storage => Icon::Folder,
+    }
   }
 }
 
@@ -173,6 +201,7 @@ impl Change {
 
 #[derive(Debug, Clone)]
 pub enum Message {
+  Section(Section),
   Change(Change),
   PickBackupDir,
   PickGameDir,
@@ -180,119 +209,184 @@ pub enum Message {
   Open(PathBuf),
 }
 
-pub fn update(message: Message, shared: &mut Shared) -> Task<AppMessage> {
-  match message {
-    Message::Change(change) => {
-      change.apply(&mut shared.settings);
-      let lithic = shared.lithic.clone();
-      Task::perform(
-        blocking(move || {
-          lithic.update_settings(|s| change.apply(s))?;
-          lithic.settings().map(Box::new)
-        }),
-        |r| AppMessage::Settings(Message::Saved(r)),
+#[derive(Debug, Default)]
+pub struct State {
+  section: Section,
+}
+
+impl State {
+  pub fn update(
+    &mut self,
+    message: Message,
+    shared: &mut Shared,
+  ) -> Task<AppMessage> {
+    match message {
+      Message::Section(section) => {
+        self.section = section;
+        Task::none()
+      },
+      Message::Change(change) => {
+        change.apply(&mut shared.settings);
+        let lithic = shared.lithic.clone();
+        Task::perform(
+          blocking(move || {
+            lithic.update_settings(|s| change.apply(s))?;
+            lithic.settings().map(Box::new)
+          }),
+          |r| AppMessage::Settings(Message::Saved(r)),
+        )
+      },
+      Message::PickBackupDir => {
+        Task::future(pick_folder(t("settings-backups-dir"))).and_then(|d| {
+          Task::done(AppMessage::Settings(Message::Change(Change::BackupDir(
+            Some(d),
+          ))))
+        })
+      },
+      Message::PickGameDir => {
+        Task::future(pick_folder(t("settings-game-dir"))).and_then(|d| {
+          Task::done(AppMessage::Settings(Message::Change(Change::GameDir(
+            Some(d),
+          ))))
+        })
+      },
+      Message::Saved(Ok(settings)) => {
+        shared.settings = *settings;
+        Task::done(AppMessage::CheckSystemTheme)
+      },
+      Message::Saved(Err(e)) => {
+        Task::batch([
+          shared.toasts.error(t("settings-save-failed"), Some(e)),
+          Task::done(AppMessage::Reload),
+        ])
+      },
+      Message::Open(path) => {
+        Task::done(AppMessage::Open(path.display().to_string()))
+      },
+    }
+  }
+
+  pub fn view<'a>(&'a self, shared: &'a Shared) -> Element<'a, Message> {
+    let nav = column(Section::ALL.into_iter().map(|section| {
+      let active = self.section == section;
+      button(
+        row![
+          icon::colored(section.icon(), 16.0, move |theme| {
+            let p = theme.extended_palette();
+            if active {
+              p.primary.base.color
+            } else {
+              p.background.base.text
+            }
+          }),
+          text(section.label()).size(14),
+        ]
+        .spacing(10)
+        .align_y(Center),
       )
-    },
-    Message::PickBackupDir => {
-      Task::future(pick_folder(t("settings-backups-dir"))).and_then(|d| {
-        Task::done(AppMessage::Settings(Message::Change(Change::BackupDir(
-          Some(d),
-        ))))
-      })
-    },
-    Message::PickGameDir => {
-      Task::future(pick_folder(t("settings-game-dir"))).and_then(|d| {
-        Task::done(AppMessage::Settings(Message::Change(Change::GameDir(
-          Some(d),
-        ))))
-      })
-    },
-    Message::Saved(Ok(settings)) => {
-      shared.settings = *settings;
-      Task::done(AppMessage::CheckSystemTheme)
-    },
-    Message::Saved(Err(e)) => {
-      Task::batch([
-        shared.toasts.error(t("settings-save-failed"), Some(e)),
-        Task::done(AppMessage::Reload),
-      ])
-    },
-    Message::Open(path) => {
-      Task::done(AppMessage::Open(path.display().to_string()))
-    },
+      .width(Fill)
+      .padding([7, 12])
+      .style(style::nav(active))
+      .on_press(Message::Section(section))
+      .into()
+    }))
+    .spacing(4)
+    .width(190);
+
+    let section = self.section;
+    // Rows stay readable on wide windows instead of pushing controls far
+    // from their labels.
+    let pane = responsive(move |size| {
+      let rows = match section {
+        Section::General => general(shared),
+        Section::Mods => mods(shared),
+        Section::Storage => storage(shared),
+      };
+      container(scrollable(
+        column![
+          text(section.label()).size(18).font(widget::bold()),
+          widget::divided(rows),
+        ]
+        .spacing(8)
+        .padding([0, 8]),
+      ))
+      .width(size.width.min(880.0))
+      .into()
+    });
+
+    widget::page(
+      t("nav-settings"),
+      space(),
+      row![nav, rule::vertical(1).style(style::divider), pane]
+        .spacing(20)
+        .height(Fill),
+    )
   }
 }
 
-pub fn view(shared: &Shared) -> Element<'_, Message> {
-  widget::page(
-    t("nav-settings"),
-    space(),
-    responsive(move |size| {
-      scrollable(body(shared, size.width)).height(Fill).into()
-    }),
-  )
-}
-
-fn body(shared: &Shared, width: f32) -> Element<'_, Message> {
-  let compact_paths = width < 620.0;
+fn general(shared: &Shared) -> Vec<Element<'_, Message>> {
   let s = &shared.settings;
-  let change = |c: Change| Message::Change(c);
   let mode = ThemeMode::from_key(&s.gui.theme_mode);
-
-  let mut appearance = column![widget::field(
+  let mut rows = vec![widget::setting_row(
     t("settings-theme"),
-    pick_list(ThemeMode::ALL, Some(mode), move |m| {
-      change(Change::ThemeMode(m))
-    }),
-    None
-  )]
-  .spacing(16);
+    None,
+    widget::select(ThemeMode::ALL, Some(mode), |m| {
+      Message::Change(Change::ThemeMode(m))
+    })
+    .width(CONTROL_WIDTH),
+  )];
   if mode == ThemeMode::Preset {
     let presets: Vec<String> = NativeTheme::list_presets()
       .iter()
       .map(|p| p.key.to_string())
       .collect();
     let selected = presets.iter().find(|p| **p == s.gui.theme_preset).cloned();
-    appearance = appearance.push(widget::field(
+    rows.push(widget::setting_row(
       t("settings-theme-preset"),
-      pick_list(presets, selected, move |p| change(Change::Preset(p)))
-        .placeholder(t("settings-theme-preset-pick")),
       None,
+      widget::select(presets, selected, |p| Message::Change(Change::Preset(p)))
+        .placeholder(t("settings-theme-preset-pick"))
+        .width(CONTROL_WIDTH),
     ));
   }
-  appearance = appearance.push(widget::field(
+  rows.push(widget::setting_row(
     t("settings-start-page"),
-    pick_list(
+    None,
+    widget::select(
       StartPage::ALL,
       Some(StartPage::from_key(&s.gui.initial_page)),
-      move |p| change(Change::StartPage(p)),
-    ),
-    None,
+      |p| Message::Change(Change::StartPage(p)),
+    )
+    .width(CONTROL_WIDTH),
   ));
+  rows
+}
 
+fn mods(shared: &Shared) -> Vec<Element<'_, Message>> {
+  let s = &shared.settings;
   let counts: Vec<usize> = (1..=16).collect();
-  let mut mods = column![
-    toggler(s.mods.allow_prerelease)
-      .label(t("settings-prerelease"))
-      .on_toggle(move |on| change(Change::AllowPrerelease(on))),
-    text(t("settings-prerelease-hint"))
-      .size(12)
-      .style(style::muted),
-    widget::field(
-      t("settings-concurrency"),
-      pick_list(counts, Some(s.mods.concurrency), move |n| {
-        change(Change::Concurrency(n))
-      }),
-      None
+  let mut rows = vec![
+    widget::setting_row(
+      t("settings-prerelease"),
+      Some(t("settings-prerelease-hint")),
+      toggler(s.mods.allow_prerelease)
+        .on_toggle(|on| Message::Change(Change::AllowPrerelease(on))),
     ),
-    toggler(s.backups.enabled)
-      .label(t("settings-backups"))
-      .on_toggle(move |on| change(Change::Backups(on))),
-    text(t("settings-backups-hint"))
-      .size(12)
-      .style(style::muted),
-  ]
-  .spacing(10);
+    widget::setting_row(
+      t("settings-concurrency"),
+      None,
+      widget::select(counts, Some(s.mods.concurrency), |n| {
+        Message::Change(Change::Concurrency(n))
+      })
+      .width(CONTROL_WIDTH),
+    ),
+    widget::setting_row(
+      t("settings-backups"),
+      None,
+      toggler(s.backups.enabled)
+        .on_toggle(|on| Message::Change(Change::Backups(on))),
+    ),
+  ];
   if s.backups.enabled {
     let keeps: Vec<usize> = (1..=10).collect();
     let dir = s
@@ -300,153 +394,127 @@ fn body(shared: &Shared, width: f32) -> Element<'_, Message> {
       .dir
       .clone()
       .unwrap_or_else(|| shared.lithic.paths.backups_dir());
-    mods = mods
-      .push(widget::field(
-        t("settings-backups-keep"),
-        pick_list(keeps, Some(s.backups.keep), move |n| {
-          change(Change::BackupsKeep(n))
-        }),
-        None,
-      ))
-      .push(widget::field(
-        t("settings-backups-dir"),
-        folder_row(
-          &dir,
-          Message::PickBackupDir,
-          s.backups
-            .dir
-            .is_some()
-            .then_some(change(Change::BackupDir(None))),
-          compact_paths,
-        ),
-        None,
-      ));
+    rows.push(widget::setting_row(
+      t("settings-backups-keep"),
+      None,
+      widget::select(keeps, Some(s.backups.keep), |n| {
+        Message::Change(Change::BackupsKeep(n))
+      })
+      .width(CONTROL_WIDTH),
+    ));
+    rows.push(folder_row(
+      t("settings-backups-dir"),
+      None,
+      &dir,
+      Message::PickBackupDir,
+      s.backups
+        .dir
+        .is_some()
+        .then_some(Message::Change(Change::BackupDir(None))),
+    ));
   }
+  rows
+}
 
+fn storage(shared: &Shared) -> Vec<Element<'_, Message>> {
+  let s = &shared.settings;
+  let paths = &shared.lithic.paths;
   let game_dir = s
     .game
     .install_dir
     .clone()
-    .unwrap_or_else(|| shared.lithic.paths.game_dir());
-  let storage = column![
-    widget::field(
+    .unwrap_or_else(|| paths.game_dir());
+  vec![
+    folder_row(
       t("settings-game-dir"),
-      folder_row(
-        &game_dir,
-        Message::PickGameDir,
-        s.game
-          .install_dir
-          .is_some()
-          .then_some(change(Change::GameDir(None))),
-        compact_paths,
-      ),
       Some(t("settings-game-dir-hint")),
+      &game_dir,
+      Message::PickGameDir,
+      s.game
+        .install_dir
+        .is_some()
+        .then_some(Message::Change(Change::GameDir(None))),
     ),
-    path_row(
-      t("settings-path-config"),
-      shared.lithic.paths.config.clone(),
-      compact_paths
-    ),
-    path_row(
-      t("settings-path-data"),
-      shared.lithic.paths.data.clone(),
-      compact_paths
-    ),
-    path_row(
-      t("settings-path-cache"),
-      shared.lithic.paths.cache.clone(),
-      compact_paths
-    ),
+    path_row(t("settings-path-config"), paths.config.clone()),
+    path_row(t("settings-path-data"), paths.data.clone()),
+    path_row(t("settings-path-cache"), paths.cache.clone()),
   ]
-  .spacing(12);
-
-  let appearance = section(t("settings-appearance"), appearance);
-  let mods = section(t("settings-mods"), mods);
-  let storage = section(t("settings-storage"), storage);
-
-  if width >= 1050.0 {
-    row![
-      column![appearance, mods].spacing(16).width(Fill),
-      column![storage].width(Fill),
-    ]
-    .spacing(16)
-    .into()
-  } else {
-    column![appearance, mods, storage].spacing(16).into()
-  }
 }
 
-fn section<'a>(
-  title: String,
-  content: impl Into<Element<'a, Message>>,
-) -> Element<'a, Message> {
-  widget::card(
-    column![text(title).size(16).font(widget::bold()), content.into()]
-      .spacing(14),
+fn path_text<'a>(path: &Path) -> Element<'a, Message> {
+  container(
+    text(path.display().to_string())
+      .size(13)
+      .style(style::muted)
+      .wrapping(text::Wrapping::WordOrGlyph),
   )
+  .max_width(560)
   .into()
 }
 
 fn folder_row<'a>(
+  label: String,
+  hint: Option<String>,
   path: &Path,
   pick: Message,
   reset: Option<Message>,
-  compact: bool,
 ) -> Element<'a, Message> {
-  let path = text(path.display().to_string())
-    .size(13)
-    .wrapping(text::Wrapping::WordOrGlyph)
-    .width(Fill);
-  let change = button(text(t("common-change")).size(13))
-    .style(button::secondary)
-    .on_press(pick);
-  let mut actions = row![change].spacing(8).align_y(Center);
+  let mut control = row![
+    path_text(path),
+    widget::icon_button(
+      Icon::Folder,
+      t("common-open-folder"),
+      Some(Message::Open(path.to_path_buf()))
+    ),
+    widget::secondary(t("common-change"), Some(pick)),
+  ]
+  .spacing(8)
+  .align_y(Center);
   if let Some(reset) = reset {
-    actions = actions.push(
-      button(text(t("common-reset")).size(13))
-        .style(button::text)
-        .on_press(reset),
-    );
+    control = control.push(widget::icon_button(
+      Icon::Close,
+      t("common-reset"),
+      Some(reset),
+    ));
   }
-  if compact {
-    column![path, actions].spacing(8).into()
-  } else {
-    row![path, actions].spacing(8).align_y(Center).into()
-  }
+  widget::setting_row(label, hint, control)
 }
 
-fn path_row<'a>(
-  label: String,
-  path: PathBuf,
-  compact: bool,
-) -> Element<'a, Message> {
-  let value = text(path.display().to_string())
-    .size(13)
-    .style(style::muted)
-    .wrapping(text::Wrapping::WordOrGlyph)
-    .width(Fill);
-  let open = button(text(t("common-open")).size(13))
-    .style(button::text)
-    .on_press(Message::Open(path));
-  if compact {
-    column![
-      row![
-        text(label)
-          .size(13)
-          .wrapping(text::Wrapping::WordOrGlyph)
-          .width(Fill),
-        open
-      ]
-      .spacing(8)
-      .align_y(Center),
-      value,
+fn path_row<'a>(label: String, path: PathBuf) -> Element<'a, Message> {
+  widget::setting_row(
+    label,
+    None,
+    row![
+      path_text(&path),
+      widget::icon_button(
+        Icon::Folder,
+        t("common-open-folder"),
+        Some(Message::Open(path))
+      ),
     ]
-    .spacing(4)
-    .into()
-  } else {
-    row![text(label).size(13).width(160), value, open]
-      .spacing(8)
-      .align_y(Center)
-      .into()
+    .spacing(8)
+    .align_y(Center),
+  )
+}
+
+#[cfg(test)]
+#[expect(
+  clippy::unwrap_used,
+  reason = "test setup and assertions intentionally fail on error"
+)]
+mod tests {
+  use lithic_core::{Lithic, Paths};
+
+  use super::*;
+
+  #[test]
+  fn sections_switch() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut shared =
+      Shared::new(Lithic::new(Paths::rooted(dir.path())).unwrap());
+    let mut state = State::default();
+    assert_eq!(state.section, Section::General);
+    let _ = state.update(Message::Section(Section::Storage), &mut shared);
+    assert_eq!(state.section, Section::Storage);
   }
 }

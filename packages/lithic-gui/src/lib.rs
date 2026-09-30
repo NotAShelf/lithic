@@ -5,6 +5,7 @@ mod notify;
 mod screen;
 mod style;
 mod task;
+mod theme;
 mod widget;
 
 use std::{env, io};
