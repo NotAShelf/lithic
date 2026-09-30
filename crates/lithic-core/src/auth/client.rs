@@ -1,4 +1,4 @@
-//! Login against `auth.vintagestory.at/v2/gamelogin`.
+//! Login against `auth3.vintagestory.at/v2/gamelogin`.
 //!
 //! The endpoint takes a form POST and answers HTTP 200 with a JSON object for
 //! both success and failure. Failures carry a `reason` (for example
@@ -12,7 +12,8 @@ use serde_json::{Map, Value};
 
 use crate::http::Http;
 
-const GAMELOGIN_URL: &str = "https://auth.vintagestory.at/v2/gamelogin";
+const GAMELOGIN_URL: &str = "https://auth3.vintagestory.at/v2/gamelogin";
+const VALIDATE_URL: &str = "https://auth3.vintagestory.at/clientvalidate";
 
 #[derive(Debug, Clone)]
 pub enum AuthError {
@@ -89,6 +90,52 @@ pub async fn gamelogin(
     return Err(AuthError::Server("not a JSON object".to_string()));
   };
   interpret(obj)
+}
+
+/// Checks whether the game's server still accepts a saved session.
+///
+/// # Errors
+///
+/// Returns an error if the server cannot be reached or its response is invalid.
+pub(crate) async fn validate_session(
+  http: &Http,
+  uid: &str,
+  sessionkey: &str,
+) -> Result<bool, AuthError> {
+  let (status, body) = http
+    .post_form(VALIDATE_URL, &[("uid", uid), ("sessionkey", sessionkey)])
+    .await
+    .map_err(|e| AuthError::Network(e.to_string()))?;
+  if !(200..300).contains(&status) {
+    return Err(AuthError::Server(format!("HTTP {status}")));
+  }
+  parse_validation(&body)
+}
+
+fn parse_validation(body: &str) -> Result<bool, AuthError> {
+  let response: Value = serde_json::from_str(body).map_err(|_| {
+    AuthError::Server("invalid session validation response".into())
+  })?;
+  match response.get("valid") {
+    Some(Value::Bool(valid)) => Ok(*valid),
+    Some(Value::Number(valid)) if valid.as_u64() == Some(1) => Ok(true),
+    Some(Value::Number(valid)) if valid.as_u64() == Some(0) => Ok(false),
+    Some(Value::String(valid))
+      if valid == "1" || valid.eq_ignore_ascii_case("true") =>
+    {
+      Ok(true)
+    },
+    Some(Value::String(valid))
+      if valid == "0" || valid.eq_ignore_ascii_case("false") =>
+    {
+      Ok(false)
+    },
+    _ => {
+      Err(AuthError::Server(
+        "invalid session validation response".into(),
+      ))
+    },
+  }
 }
 
 fn field(obj: &Map<String, Value>, key: &str) -> String {
@@ -182,12 +229,19 @@ mod tests {
   }
 
   #[test]
+  fn session_validation_requires_explicit_acceptance() {
+    assert!(!parse_validation(r#"{"valid":0,"reason":"nosession"}"#).unwrap());
+    assert!(parse_validation(r#"{"valid":1}"#).unwrap());
+    assert!(parse_validation(r#"{"reason":"nosession"}"#).is_err());
+  }
+
+  #[test]
   fn two_factor() {
     match parse(
       r#"{"valid":0,"reason":"requiretotpcode","prelogintoken":"plt-123"}"#,
     ) {
       Err(AuthError::TwoFactorRequired { prelogintoken }) => {
-        assert_eq!(prelogintoken, "plt-123")
+        assert_eq!(prelogintoken, "plt-123");
       },
       other => panic!("expected TwoFactorRequired, got {other:?}"),
     }
@@ -201,7 +255,7 @@ mod tests {
   fn bad_credentials() {
     match parse(r#"{"valid":0,"reason":"invalidemailorpassword"}"#) {
       Err(AuthError::InvalidCredentials(reason)) => {
-        assert_eq!(reason, "invalidemailorpassword")
+        assert_eq!(reason, "invalidemailorpassword");
       },
       other => panic!("expected InvalidCredentials, got {other:?}"),
     }
@@ -211,7 +265,7 @@ mod tests {
   fn unknown_shape_names_the_keys() {
     match parse(r#"{"foo":"bar","baz":1}"#) {
       Err(AuthError::Server(msg)) => {
-        assert!(msg.contains("foo") && msg.contains("baz"))
+        assert!(msg.contains("foo") && msg.contains("baz"));
       },
       other => panic!("expected Server, got {other:?}"),
     }
