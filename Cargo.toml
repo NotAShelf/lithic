@@ -16,8 +16,8 @@ repository   = "https://github.com/NotAShelf/lithic"
 # Workspace components
 lithic-cli    = { path = "packages/lithic-cli", version = "2.0.0" }
 lithic-core   = { path = "crates/lithic-core", version = "2.0.0" }
-lithic-icons  = { path = "crates/lithic-icons", version = "2.0.0" }
 lithic-gui    = { path = "packages/lithic-gui", version = "2.0.0" }
+lithic-icons  = { path = "crates/lithic-icons", version = "2.0.0" }
 lithic-locale = { path = "crates/lithic-locale", version = "2.0.0" }
 
 clap = { version = "4.6.7", features = [ "color", "suggestions", "derive" ] }
@@ -27,8 +27,8 @@ dirs = { version = "7.0.0" }
 flate2 = "1.1.10"
 futures = "0.3.34"
 html2text = "0.17.1"
-ini-edit = "0.3.2"
 indicatif = { version = "0.18.6", features = [ "tokio" ] }
+ini-edit = "0.3.2"
 jiff = "0.2.37"
 keyring = "4.2.0"
 lenient_semver = "0.4.2"
@@ -152,7 +152,6 @@ unit_bindings          = "warn" # catch useless `let _ = expr` bindings
 unsafe_code            = "warn" # guess
 unsafe_op_in_unsafe_fn = "warn" # require unsafe blocks even inside unsafe fn
 unused_unsafe          = "warn" # catch unnecessary unsafe blocks
-
 
 [profile.dev]
 opt-level = 1
