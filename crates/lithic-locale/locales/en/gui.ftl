@@ -319,15 +319,21 @@ games-add-failed = Could not add that install
 
 ## Accounts
 
-accounts-none = No accounts yet. Sign in below so the game starts already logged in.
+accounts-none = No accounts yet
+accounts-none-body = Sign in with your Vintage Story account so the game starts already logged in.
+accounts-add = Add account
 accounts-active = Active
-accounts-session-missing = Sign in again
+accounts-session-missing = No saved session. Sign in again.
+accounts-checking = Checking the session
+accounts-valid = Signed in
+accounts-rejected = The session has expired. Sign in again.
+accounts-check-failed = Could not check the session: { $error }
+accounts-sign-in-again = Sign in again
 accounts-make-active = Make active
 accounts-logout = Sign out
 accounts-logout-title = Sign out?
-accounts-logout-body = { $name } is removed from lithic and its stored session is deleted.
+accounts-logout-body = Lithic will forget { $name } and its session.
 accounts-login-title = Sign in to Vintage Story
-accounts-login-hint = Use the email and password of your account at vintagestory.at.
 accounts-email = Email
 accounts-password = Password
 accounts-login = Sign in
