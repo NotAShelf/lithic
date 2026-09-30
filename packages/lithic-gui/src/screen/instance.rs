@@ -34,6 +34,7 @@ use lithic_core::{
 };
 
 use super::{
+  browse,
   describe_problem,
   format_duration,
   format_time,
@@ -51,6 +52,7 @@ use crate::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
   Mods,
+  Browse,
   Logs,
   Settings,
 }
@@ -225,6 +227,7 @@ struct Logs {
 pub struct State {
   pub id:   String,
   tab:      Tab,
+  browse:   browse::State,
   mods:     Option<Result<Vec<InstalledMod>, String>>,
   problems: Vec<Problem>,
   filter:   String,
@@ -251,6 +254,7 @@ pub enum Message {
   AskRemove(String),
   Pin(String, Option<String>),
   AddMods,
+  Browse(browse::Message),
   Launch,
   Stop,
   Select,
@@ -311,6 +315,9 @@ impl State {
     Self {
       id: id.to_string(),
       tab: Tab::Mods,
+      browse: browse::State::for_instance(id, |m| {
+        AppMessage::Instance(Message::Browse(m))
+      }),
       mods: None,
       problems: Vec::new(),
       filter: String::new(),
@@ -325,6 +332,16 @@ impl State {
     }
   }
 
+  /// Work to do when the instance page is shown.
+  pub fn enter(&self, shared: &Shared) -> Task<AppMessage> {
+    let mods = load_mods(shared, &self.id);
+    if self.tab == Tab::Browse {
+      Task::batch([mods, browse::enter(&self.browse, shared)])
+    } else {
+      mods
+    }
+  }
+
   pub fn follows_log(&self) -> bool {
     self.tab == Tab::Logs && self.logs.follow
   }
@@ -332,7 +349,10 @@ impl State {
   /// Called when a background operation on this instance finishes.
   pub fn after_op(&mut self, shared: &Shared) -> Task<AppMessage> {
     self.updates = None;
-    load_mods(shared, &self.id)
+    Task::batch([
+      load_mods(shared, &self.id),
+      browse::refresh_installed(&self.browse, shared),
+    ])
   }
 
   pub fn refresh_logs(&self, shared: &Shared) -> Task<AppMessage> {
@@ -436,6 +456,9 @@ impl State {
       },
       Message::Tab(tab) => {
         self.tab = tab;
+        if tab == Tab::Browse {
+          return browse::enter(&self.browse, shared);
+        }
         if tab == Tab::Logs {
           return self.refresh_logs(shared);
         }
@@ -553,8 +576,9 @@ impl State {
         });
       },
       Message::AddMods => {
-        return Task::done(AppMessage::BrowseFor(self.id.clone()));
+        return Task::done(AppMessage::Instance(Message::Tab(Tab::Browse)));
       },
+      Message::Browse(m) => return self.browse.update(m, shared),
       Message::Launch => {
         return Task::done(AppMessage::Launch(self.id.clone()));
       },
@@ -859,6 +883,7 @@ impl State {
 
     let body: Element<Message> = match self.tab {
       Tab::Mods => self.mods_tab(instance, shared),
+      Tab::Browse => self.browse.content(shared).map(Message::Browse),
       Tab::Logs => self.logs_tab(),
       Tab::Settings => self.settings_tab(instance, shared),
     };
@@ -868,12 +893,23 @@ impl State {
       .padding(24)
       .height(Fill);
 
-    match &self.confirm {
-      Some(confirm) => {
+    if let Some(confirm) = &self.confirm {
+      return widget::modal(
+        content,
+        Self::confirm_view(confirm, instance),
+        Message::CloseConfirm,
+      );
+    }
+    match self
+      .browse
+      .details(shared)
+      .filter(|_| self.tab == Tab::Browse)
+    {
+      Some(details) => {
         widget::modal(
           content,
-          Self::confirm_view(confirm, instance),
-          Message::CloseConfirm,
+          details.map(Message::Browse),
+          Message::Browse(browse::Message::CloseDetails),
         )
       },
       None => content.into(),
@@ -995,6 +1031,7 @@ impl State {
     };
     row![
       tab(mods_label, Tab::Mods),
+      tab(t("instance-tab-browse"), Tab::Browse),
       tab(t("instance-tab-logs"), Tab::Logs),
       tab(t("instance-tab-settings"), Tab::Settings),
     ]
