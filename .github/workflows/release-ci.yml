@@ -90,7 +90,13 @@ jobs:
           cd release-artifacts
           for dir in */; do
             platform=$(basename "$dir")
-            (cd "$dir" && chmod +x lithic lithic-cli lithic-gui 2>/dev/null; zip -9 "../../archives/${platform}.zip" ./*)
+            (
+              cd "$dir"
+              if [[ "$platform" != lithic-windows-* ]]; then
+                chmod +x lithic lithic-cli lithic-gui
+              fi
+              zip -9 "../../archives/${platform}.zip" ./*
+            )
           done
 
       - name: Create Release
