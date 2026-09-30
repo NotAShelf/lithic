@@ -30,42 +30,49 @@ and the app uses it as the default place to install mods.
 <!--markdownlint-enable MD033-->
 
 **Instances** lists your instances with their game version, mod count and play
-time. Press Play to start one, or open it to see three tabs:
+time. Press Play to start one. If its game version is not installed yet, lithic
+downloads it first. Open an instance to see four tabs:
 
 - _Mods_ shows what is installed. Untick a mod to turn it off without deleting
-  it. "Check for updates" asks the ModDB for newer releases that fit the
+  it. The refresh button asks the ModDB for newer releases that fit the
   instance's game version, and "Update all" installs them. Pin a mod to keep it
   on its current version. A yellow panel appears when a mod needs something that
   is missing or too old, with a button to install it.
+- _Browse_ searches the ModDB and installs straight into this instance. "Add
+  mods" opens it.
 - _Logs_ shows the game's output from each launch and the game's own log files.
   While the game runs, "Follow" keeps the view at the end.
 - _Settings_ changes the name, game version, account, game arguments,
   environment variables, a program to start the game through (such as
   `gamemoderun`) and an extra mods folder.
 
-The buttons under the instance name open its folder, copy it, export it as a
-pack, or delete it.
+The icons next to Play open the instance folder, copy it, export it as a pack,
+make it the selected instance, or delete it. Hover over any icon to see what it
+does.
 
-**Browse mods** searches the ModDB. By default it only shows mods with releases
-for the game version of the instance you are installing into; turn that off to
-see everything. "Hide installed mods" removes mods already in that instance from
-the list. The rightmost star adds or removes a favourite. Use Details to read
-the description or install a specific release. Installing a specific release
-pins the mod to it.
+**Browse mods** searches the ModDB. The picker in the top right chooses the
+instance mods go into. By default the list only shows mods with releases for
+that instance's game version; turn that off to see everything. "Hide installed
+mods" removes mods already in that instance from the list. The star adds or
+removes a favourite. The info button opens a mod's description and releases,
+where you can install a specific release. Installing a specific release pins the
+mod to it.
 
 **Game versions** installs official builds, shows which instances use each
 version, and registers copies you installed yourself. Removing a downloaded
-version deletes its files; instances using it cannot be played until you
-reinstall it or select another version.
+version deletes its files; lithic downloads it again the next time an instance
+using it is started.
 
 **Accounts** signs you in. With an account, the game starts already logged in.
-Each instance can use its own account; otherwise it uses the active one.
-If the game rejects a saved session, sign in again. Lithic keeps a renewed game
-session after a normal launch closes.
+Each instance can use its own account; otherwise it uses the active one. "Add
+account" opens the sign-in form. Lithic checks every saved session when you
+open the page. The dot next to a name turns green when the session works and red
+when you need to sign in again.
 
-Account sessions go to the system keyring (Secret Service on Linux, Keychain on
-macOS, Credential Manager on Windows). If none is available, lithic stores them
-in a file only your user can read.
+Saved sessions go to the system keyring (Secret Service on Linux,
+Keychain on macOS, Credential Manager on Windows). If none is available,
+lithic stores them in a file only your user can read. Lithic keeps a
+game-renewed session after a normal launch closes.
 
 ## Commands
 
@@ -122,10 +129,11 @@ Play:
 
 ```sh
 # Launch the game
-$ lithic launch            # waits for the game to close and records play time
-$ lithic launch --dry-run  # prints the command without running it
-$ lithic logs              # output of the last launch
-$ lithic logs --game       # the game's own client-main.log
+$ lithic launch               # waits for the game to close and records play time
+$ lithic launch --no-install  # fail instead of downloading a missing game version
+$ lithic launch --dry-run     # prints the command without running it
+$ lithic logs                 # output of the last launch
+$ lithic logs --game          # the game's own client-main.log
 ```
 
 Accounts and packs:
