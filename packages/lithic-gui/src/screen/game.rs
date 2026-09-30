@@ -4,17 +4,17 @@ use iced::{
   Center,
   Element,
   Fill,
+  Shrink,
   Task,
   widget::{
-    button,
     column,
-    pick_list,
+    container,
     progress_bar,
+    responsive,
     row,
     scrollable,
     space,
     text,
-    text_input,
     toggler,
   },
 };
@@ -26,6 +26,7 @@ use lithic_core::{
 use crate::{
   app::{Message as AppMessage, OpKind, Outcome, Shared},
   i18n::{t, t1},
+  icon::Icon,
   style::{self, Tone},
   task::{blocking, pick_folder},
   widget,
@@ -167,11 +168,13 @@ impl State {
 
   pub fn view<'a>(&'a self, shared: &'a Shared) -> Element<'a, Message> {
     let installed: Element<Message> = if shared.installs.is_empty() {
-      widget::notice(text(t("games-none")), Tone::Neutral)
+      widget::card(text(t("games-none")).style(style::muted)).into()
     } else {
-      column(shared.installs.iter().map(|i| install_card(i, shared)))
-        .spacing(8)
-        .into()
+      widget::card(widget::divided(
+        shared.installs.iter().map(|i| install_row(i, shared)),
+      ))
+      .padding(4)
+      .into()
     };
 
     let running: Vec<Element<Message>> = shared
@@ -190,9 +193,11 @@ impl State {
                 text(t1("games-installing", "version", version.to_string()))
                   .font(widget::bold())
                   .width(Fill),
-                button(text(t("common-cancel")).size(13))
-                  .style(button::text)
-                  .on_press(Message::Cancel(version.to_string())),
+                widget::icon_button(
+                  Icon::Close,
+                  t("common-cancel"),
+                  Some(Message::Cancel(version.to_string()))
+                ),
               ]
               .align_y(Center),
               text(busy.label()).size(13).style(style::muted),
@@ -205,17 +210,23 @@ impl State {
       })
       .collect();
 
+    let panels = responsive(move |size| {
+      let install = self.install_panel(shared);
+      let add = self.add_panel();
+      if size.width >= 1000.0 {
+        row![install, add].spacing(16).into()
+      } else {
+        column![install, add].spacing(16).into()
+      }
+    })
+    .height(Shrink);
     let body = column![
-      section_title(t("games-installed")),
-      installed,
+      panels,
       column(running).spacing(8),
-      section_title(t("games-install-title")),
-      self.install_panel(shared),
-      section_title(t("games-add-title")),
-      self.add_panel(),
+      section_title(t("games-installed"), None),
+      installed,
     ]
-    .spacing(12)
-    .max_width(820);
+    .spacing(16);
 
     let page =
       widget::page(t("nav-games"), space(), scrollable(body).height(Fill));
@@ -254,13 +265,19 @@ impl State {
   fn install_panel<'a>(&'a self, shared: &'a Shared) -> Element<'a, Message> {
     let Some(manifest) = &shared.manifest else {
       return widget::card(
-        row![
-          text(t("games-list-unavailable")).width(Fill),
-          button(text(t("common-retry")))
-            .style(button::secondary)
-            .on_press(Message::RetryList),
+        column![
+          section_title(t("games-install-title"), None),
+          row![
+            text(t("games-list-unavailable")).width(Fill),
+            widget::secondary_icon(
+              Icon::Refresh,
+              t("common-retry"),
+              Some(Message::RetryList)
+            ),
+          ]
+          .align_y(Center),
         ]
-        .align_y(Center),
+        .spacing(12),
       )
       .into();
     };
@@ -288,9 +305,19 @@ impl State {
 
     widget::card(
       column![
-        text(t("games-install-hint")).size(13).style(style::muted),
         row![
-          pick_list(versions, self.selected.clone(), Message::Select)
+          section_title(
+            t("games-install-title"),
+            Some(t("games-install-hint"))
+          ),
+          space::horizontal(),
+          toggler(self.show_unstable)
+            .label(t("games-show-unstable"))
+            .on_toggle(Message::ShowUnstable),
+        ]
+        .align_y(Center),
+        row![
+          widget::select(versions, self.selected.clone(), Message::Select)
             .placeholder(t("games-pick-version"))
             .width(220),
           widget::action(
@@ -299,10 +326,6 @@ impl State {
             busy,
             self.selected.is_some().then_some(Message::Install)
           ),
-          space::horizontal(),
-          toggler(self.show_unstable)
-            .label(t("games-show-unstable"))
-            .on_toggle(Message::ShowUnstable),
         ]
         .spacing(12)
         .align_y(Center),
@@ -325,28 +348,35 @@ impl State {
       .map_or_else(|| t("games-add-no-folder"), |p| p.display().to_string());
     widget::card(
       column![
-        text(t("games-add-hint")).size(13).style(style::muted),
+        section_title(t("games-add-title"), Some(t("games-add-hint"))),
         row![
           text(path_label).size(13).width(Fill),
-          button(text(t("common-choose-folder")).size(13))
-            .style(button::secondary)
-            .on_press(Message::PickAddPath),
+          widget::secondary_icon(
+            Icon::Folder,
+            t("common-choose-folder"),
+            Some(Message::PickAddPath)
+          ),
         ]
         .spacing(8)
         .align_y(Center),
         row![
-          text_input(&t("games-add-version"), &self.add_version)
+          widget::input(&t("games-add-version"), &self.add_version)
             .on_input(Message::AddVersion)
             .on_submit(Message::Add)
             .padding(8)
             .width(220),
           space::horizontal(),
-          widget::action(
-            t("games-add"),
-            t("games-adding"),
-            self.adding,
-            (self.add_path.is_some() && !self.add_version.trim().is_empty())
-              .then_some(Message::Add)
+          widget::secondary_icon(
+            Icon::Plus,
+            t(if self.adding {
+              "games-adding"
+            } else {
+              "games-add"
+            }),
+            (!self.adding
+              && self.add_path.is_some()
+              && !self.add_version.trim().is_empty())
+            .then_some(Message::Add)
           ),
         ]
         .spacing(12)
@@ -358,11 +388,20 @@ impl State {
   }
 }
 
-fn section_title<'a>(label: String) -> Element<'a, Message> {
-  text(label).size(16).font(widget::bold()).into()
+fn section_title<'a>(
+  label: String,
+  hint: Option<String>,
+) -> Element<'a, Message> {
+  let mut title = row![text(label).size(16).font(widget::bold())]
+    .spacing(6)
+    .align_y(Center);
+  if let Some(h) = hint {
+    title = title.push(widget::hint(h));
+  }
+  title.into()
 }
 
-fn install_card<'a>(
+fn install_row<'a>(
   install: &'a Install,
   shared: &'a Shared,
 ) -> Element<'a, Message> {
@@ -390,34 +429,39 @@ fn install_card<'a>(
   } else {
     t1("games-used-by", "names", users.join(", "))
   };
-  widget::card(
+  container(
     row![
       column![
         row![
           text(format!("Vintage Story {}", install.version))
-            .size(16)
+            .size(15)
             .font(widget::bold()),
-          badges
+          badges,
+          text(used).size(13).style(style::muted),
         ]
-        .spacing(8)
+        .spacing(10)
         .align_y(Center),
         text(install.path.display().to_string())
           .size(12)
           .style(style::muted),
-        text(used).size(13),
       ]
       .spacing(4)
       .width(Fill),
-      button(text(t("common-open-folder")).size(13))
-        .style(button::text)
-        .on_press(Message::Open(install.path.clone())),
-      button(text(t("common-remove")).size(13))
-        .style(button::text)
-        .on_press(Message::AskRemove(install.clone())),
+      widget::icon_button(
+        Icon::Folder,
+        t("common-open-folder"),
+        Some(Message::Open(install.path.clone()))
+      ),
+      widget::icon_button(
+        Icon::Trash,
+        t("common-remove"),
+        Some(Message::AskRemove(install.clone()))
+      ),
     ]
-    .spacing(8)
+    .spacing(4)
     .align_y(Center),
   )
+  .padding([8, 12])
   .into()
 }
 
