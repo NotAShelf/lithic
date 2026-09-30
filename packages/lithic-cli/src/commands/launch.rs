@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use lithic_core::{fsutil::file_name_string, launch};
+use lithic_core::{Cancel, fsutil::file_name_string, game, launch};
 use serde::Serialize;
 
 use crate::{
@@ -41,6 +41,22 @@ pub async fn launch(ctx: &Ctx, args: LaunchArgs) -> Result {
     println!("cd {}", spec.cwd.display());
     println!("{}", spec.command_line());
     return Ok(());
+  }
+
+  if let Some(version) = instance.game_version.as_deref()
+    && !args.no_install
+    && game::needs_download(&ctx.lithic.game_installs()?, version)
+  {
+    ctx.ui.status(format!(
+      "Game version {version} is not installed. Downloading it first."
+    ));
+    let progress = ctx.ui.progress();
+    let result = ctx
+      .lithic
+      .ensure_game(version, &progress.reporter, &Cancel::new())
+      .await;
+    drop(progress);
+    result?;
   }
 
   let (session, waiter) = ctx.lithic.launch(&instance).await?;

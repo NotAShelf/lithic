@@ -219,6 +219,29 @@ struct Registry {
   installs: Vec<Install>,
 }
 
+/// Whether launching `version` downloads it first, as
+/// [`Lithic::ensure_game`] does: nothing is registered for it, or a build
+/// lithic installed has lost its files.
+#[must_use]
+pub fn needs_download(installs: &[Install], version: &str) -> bool {
+  let version = version.trim().trim_start_matches(['v', 'V']);
+  installs
+    .iter()
+    .find(|i| i.version.eq_ignore_ascii_case(version))
+    .is_none_or(|i| i.managed && !i.is_available())
+}
+
+/// Whether an instance on `version` can be started: its build works, or
+/// launching downloads one. Only a broken build the user added cannot.
+#[must_use]
+pub fn launchable(installs: &[Install], version: &str) -> bool {
+  let version = version.trim().trim_start_matches(['v', 'V']);
+  needs_download(installs, version)
+    || installs
+      .iter()
+      .any(|i| i.version.eq_ignore_ascii_case(version) && i.is_available())
+}
+
 /// The executable inside a game directory, and any arguments needed before
 /// the game's own. Builds before 1.18 on Linux and macOS run under mono.
 #[must_use]
@@ -372,6 +395,32 @@ impl Lithic {
         .retain(|i| !i.version.eq_ignore_ascii_case(&install.version));
       Ok(())
     })
+  }
+
+  /// Returns the registered build of `version`, installing it first when
+  /// there is none or when a build lithic installed has lost its files. A
+  /// broken build the user added is returned as is; lithic never replaces
+  /// it.
+  ///
+  /// # Errors
+  /// Returns an error if the registry cannot be read, a broken build cannot
+  /// be removed, or the install fails, as for [`Self::install_game`].
+  pub async fn ensure_game(
+    &self,
+    version: &str,
+    reporter: &Reporter,
+    cancel: &Cancel,
+  ) -> Result<Install> {
+    match self.game_install(version) {
+      Ok(install) if install.managed && !install.is_available() => {
+        self.remove_game_install(&install.version)?;
+        self.install_game(version, reporter, cancel).await
+      },
+      Err(Error::NotFound { .. }) => {
+        self.install_game(version, reporter, cancel).await
+      },
+      found => found,
+    }
   }
 
   /// Downloads, verifies and unpacks a client build for this machine.
@@ -630,6 +679,57 @@ mod tests {
   }
 
   #[test]
+  fn only_missing_or_broken_managed_builds_are_downloaded() {
+    let d = tempfile::tempdir().unwrap();
+    let working = d.path().join("ok");
+    fs::create_dir_all(&working).unwrap();
+    fs::write(
+      working.join(if cfg!(windows) {
+        "Vintagestory.exe"
+      } else {
+        "Vintagestory"
+      }),
+      "",
+    )
+    .unwrap();
+    let gone = d.path().join("gone");
+    let installs = [
+      Install {
+        version: "1.21.5".into(),
+        path:    working,
+        managed: true,
+      },
+      Install {
+        version: "1.21.6".into(),
+        path:    gone.clone(),
+        managed: true,
+      },
+      Install {
+        version: "1.21.7".into(),
+        path:    gone,
+        managed: false,
+      },
+    ];
+    assert!(!needs_download(&installs, "v1.21.5"));
+    assert!(
+      needs_download(&installs, "1.21.6"),
+      "lithic's build lost files"
+    );
+    assert!(
+      !needs_download(&installs, "1.21.7"),
+      "never replace user builds"
+    );
+    assert!(needs_download(&installs, "1.22.0"));
+    assert!(launchable(&installs, "1.21.5"));
+    assert!(launchable(&installs, "1.21.6"));
+    assert!(
+      !launchable(&installs, "1.21.7"),
+      "a broken user build cannot"
+    );
+    assert!(launchable(&installs, "1.22.0"));
+  }
+
+  #[test]
   fn tarball_extracts_and_is_located() {
     let d = tempfile::tempdir().unwrap();
     let archive = d.path().join("vs.tar.gz");
@@ -692,8 +792,8 @@ mod tests {
     assert!(l.launch_spec(&l.instance("uses-it").unwrap()).is_err());
   }
 
-  #[test]
-  fn managed_install_removal_deletes_build_but_keeps_instance() {
+  #[tokio::test]
+  async fn managed_install_removal_deletes_build_but_keeps_instance() {
     let d = tempfile::tempdir().unwrap();
     let l = Lithic::new(crate::Paths::rooted(d.path())).unwrap();
     let build = l.game_root().unwrap().join("1.21.5");
@@ -721,6 +821,12 @@ mod tests {
         ..Default::default()
       })
       .unwrap();
+
+    let ensured = l
+      .ensure_game("1.21.5", &Reporter::none(), &Cancel::new())
+      .await
+      .unwrap();
+    assert_eq!(ensured.version, "1.21.5", "no download when registered");
 
     l.remove_game_install("1.21.5").unwrap();
     assert!(!build.exists(), "the entire managed build is removed");

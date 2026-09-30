@@ -51,12 +51,13 @@ async fn resolve_game_version(ctx: &Ctx, input: &str) -> Result<String> {
   Ok(input.trim_start_matches(['v', 'V']).to_string())
 }
 
-/// Warns when no build of `version` is installed, since launching would fail.
+/// Notes when no build of `version` is installed, since the first launch
+/// downloads it.
 fn warn_if_not_installed(ctx: &Ctx, version: &str) {
   if ctx.lithic.game_install(version).is_err() {
     ctx.ui.warn(format!(
-      "game version {version} is not installed; run `lithic game install \
-       {version}` before launching"
+      "game version {version} is not installed; the first launch downloads \
+       it, or run `lithic game install {version}` now"
     ));
   }
 }
