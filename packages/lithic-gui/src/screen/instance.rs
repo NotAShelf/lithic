@@ -10,14 +10,14 @@ use iced::{
     button,
     checkbox,
     column,
-    pick_list,
+    container,
     progress_bar,
     row,
+    rule,
     scrollable,
     space,
     text,
     text_editor,
-    text_input,
     toggler,
   },
 };
@@ -44,7 +44,8 @@ use super::{
 use crate::{
   app::{Message as AppMessage, OpKind, Outcome, Page, Shared, Summary},
   i18n::{t, t1, t2},
-  style::{self, Tone},
+  icon::Icon,
+  style::{self, Kind, Tone},
   task::{blocking, pick_folder, save_pack},
   widget,
 };
@@ -963,58 +964,88 @@ impl State {
       },
     );
 
-    let play: Element<Message> = if running {
-      button(text(t("instances-stop")))
-        .padding([8, 20])
-        .style(button::danger)
-        .on_press(Message::Stop)
-        .into()
+    let fetching = shared
+      .busy
+      .get(&self.id)
+      .is_some_and(|b| b.kind == OpKind::GameForLaunch);
+    let play = if running {
+      widget::btn(
+        Some(Icon::Stop),
+        t("instances-stop"),
+        Kind::Danger,
+        Some(Message::Stop),
+      )
+    } else if launching || fetching {
+      widget::btn(
+        Some(Icon::Play),
+        t(if fetching {
+          "instances-fetching-game"
+        } else {
+          "instances-starting"
+        }),
+        Kind::Primary,
+        None,
+      )
     } else {
-      widget::action(
+      widget::primary_icon(
+        Icon::Play,
         t("instances-play"),
-        t("instances-starting"),
-        launching,
-        instance.game_version.as_deref().is_some_and(|v| launchable(&shared.installs, v)).then_some(Message::Launch),
+        instance
+          .game_version
+          .as_deref()
+          .is_some_and(|v| launchable(&shared.installs, v))
+          .then_some(Message::Launch),
       )
     };
 
-    let small = |label: String, msg: Message| {
-      button(text(label).size(13))
-        .style(button::text)
-        .on_press(msg)
-    };
     let mut tools = row![
-      small(t("instance-open-folder"), Message::Open(Folder::Instance)),
-      small(t("instance-clone"), Message::AskClone),
-      small(t("instance-export"), Message::AskExport),
-      small(t("instance-delete"), Message::AskDelete),
+      widget::icon_button(
+        Icon::Folder,
+        t("instance-open-folder"),
+        Some(Message::Open(Folder::Instance))
+      ),
+      widget::icon_button(
+        Icon::Copy,
+        t("instance-clone"),
+        Some(Message::AskClone)
+      ),
+      widget::icon_button(
+        Icon::Export,
+        t("instance-export"),
+        Some(Message::AskExport)
+      ),
     ]
-    .spacing(2);
+    .spacing(2)
+    .align_y(Center);
     if !selected {
-      tools = tools.push(small(t("instance-select"), Message::Select));
+      tools = tools.push(widget::icon_button(
+        Icon::Select,
+        t("instance-select"),
+        Some(Message::Select),
+      ));
     }
+    tools = tools.push(widget::icon_button(
+      Icon::Trash,
+      t("instance-delete"),
+      Some(Message::AskDelete),
+    ));
 
-    column![
-      button(text(t("instance-back")).size(13))
-        .style(button::text)
-        .padding(0)
-        .on_press(Message::Back),
-      row![
-        column![
-          title,
-          text(format!("{game}  |  {played}"))
-            .size(13)
-            .style(style::muted)
-        ]
-        .spacing(6)
-        .width(Fill),
-        play,
+    row![
+      widget::icon_button(Icon::Back, t("instance-back"), Some(Message::Back)),
+      column![
+        title,
+        text(format!("{game}  |  {played}"))
+          .size(13)
+          .style(style::muted)
       ]
-      .spacing(12)
-      .align_y(Center),
+      .spacing(4)
+      .width(Fill),
       tools,
+      container(rule::vertical(1).style(style::divider)).height(24),
+      play,
     ]
-    .spacing(8)
+    .spacing(12)
+    .align_y(Center)
     .into()
   }
 
@@ -1048,33 +1079,41 @@ impl State {
     let updates = self.updates.as_deref().unwrap_or_default();
 
     let mut toolbar = row![
-      text_input(&t("instance-filter"), &self.filter)
+      widget::input(&t("instance-filter"), &self.filter)
         .on_input(Message::Filter)
         .padding(8)
         .width(260),
       space::horizontal(),
-      button(text(t("instance-open-mods")).size(13))
-        .style(button::text)
-        .on_press(Message::Open(Folder::Mods)),
-      widget::secondary(t("instance-add-mods"), Some(Message::AddMods)),
+      widget::secondary_icon(
+        Icon::Folder,
+        t("instance-open-mods"),
+        Some(Message::Open(Folder::Mods))
+      ),
     ]
     .spacing(8)
     .align_y(Center);
     toolbar = if updates.is_empty() {
-      toolbar.push(widget::action(
-        t("instance-check-updates"),
-        t("instance-checking"),
-        self.checking,
-        busy.is_none().then_some(Message::CheckUpdates),
+      toolbar.push(widget::secondary_icon(
+        Icon::Refresh,
+        t(if self.checking {
+          "instance-checking"
+        } else {
+          "instance-check-updates"
+        }),
+        (busy.is_none() && !self.checking).then_some(Message::CheckUpdates),
       ))
     } else {
-      toolbar.push(widget::action(
+      toolbar.push(widget::secondary_icon(
+        Icon::Update,
         t1("instance-update-all", "count", updates.len()),
-        t("instance-updating"),
-        busy.is_some(),
-        Some(Message::UpdateAll),
+        busy.is_none().then_some(Message::UpdateAll),
       ))
     };
+    toolbar = toolbar.push(widget::secondary_icon(
+      Icon::Plus,
+      t("instance-add-mods"),
+      Some(Message::AddMods),
+    ));
 
     let mut col = column![toolbar].spacing(12);
 
@@ -1087,9 +1126,11 @@ impl State {
         column![
           row![
             text(b.label()).width(Fill),
-            button(text(t("common-cancel")).size(13))
-              .style(button::secondary)
-              .on_press(Message::Cancel),
+            widget::icon_button(
+              Icon::Close,
+              t("common-cancel"),
+              Some(Message::Cancel)
+            ),
           ]
           .align_y(Center),
           bar,
@@ -1109,14 +1150,14 @@ impl State {
     if !self.problems.is_empty() {
       let lines = column(self.problems.iter().map(|p| {
         let fix = installable_fix(p).map(|dep| {
-          button(text(t("instance-fix-install")).size(12))
-            .style(button::secondary)
-            .on_press_maybe(
-              busy.is_none().then(|| Message::Install(dep.to_string())),
-            )
+          widget::secondary_icon(
+            Icon::Download,
+            t("instance-fix-install"),
+            busy.is_none().then(|| Message::Install(dep.to_string())),
+          )
         });
         row![text(describe_problem(p)).size(13).width(Fill)]
-          .extend(fix.map(Into::into))
+          .extend(fix)
           .align_y(Center)
           .into()
       }))
@@ -1157,7 +1198,9 @@ impl State {
               busy.is_some(),
             )
           });
-        scrollable(column(rows).spacing(6)).height(Fill).into()
+        scrollable(widget::card(widget::divided(rows)).padding(0))
+          .height(Fill)
+          .into()
       },
     };
     col.push(list).height(Fill).into()
@@ -1168,19 +1211,23 @@ impl State {
       self.logs.files.iter().cloned().map(LogFile).collect();
     let selected = self.logs.selected.clone().map(LogFile);
     let bar = row![
-      pick_list(names, selected, |f: LogFile| Message::SelectLog(f.0))
+      widget::select(names, selected, |f: LogFile| Message::SelectLog(f.0))
         .placeholder(t("instance-no-logs"))
         .width(320),
-      button(text(t("common-refresh")).size(13))
-        .style(button::secondary)
-        .on_press(Message::RefreshLog),
+      widget::icon_button(
+        Icon::Refresh,
+        t("common-refresh"),
+        Some(Message::RefreshLog)
+      ),
       space::horizontal(),
       toggler(self.logs.follow)
         .label(t("instance-follow-log"))
         .on_toggle(Message::Follow),
-      button(text(t("common-open-folder")).size(13))
-        .style(button::text)
-        .on_press(Message::Open(Folder::Logs)),
+      widget::icon_button(
+        Icon::Folder,
+        t("common-open-folder"),
+        Some(Message::Open(Folder::Logs))
+      ),
     ]
     .spacing(8)
     .align_y(Center);
@@ -1189,6 +1236,7 @@ impl State {
       widget::empty(t("instance-no-logs"), t("instance-no-logs-body"), None)
     } else {
       text_editor(&self.logs.content)
+        .style(style::editor)
         .on_action(Message::LogAction)
         .font(Font::MONOSPACE)
         .size(12)
@@ -1225,18 +1273,20 @@ impl State {
     );
     let mut mods_row = row![
       text(mods_label).size(13).width(Fill),
-      button(text(t("common-choose-folder")).size(13))
-        .style(button::secondary)
-        .on_press(Message::FormPickMods),
+      widget::secondary_icon(
+        Icon::Folder,
+        t("common-choose-folder"),
+        Some(Message::FormPickMods),
+      ),
     ]
     .spacing(8)
     .align_y(Center);
     if f.mods_dir.is_some() {
-      mods_row = mods_row.push(
-        button(text(t("common-reset")).size(13))
-          .style(button::text)
-          .on_press(Message::FormModsDir(None)),
-      );
+      mods_row = mods_row.push(widget::icon_button(
+        Icon::Close,
+        t("common-reset"),
+        Some(Message::FormModsDir(None)),
+      ));
     }
 
     let data_hint = if instance.has_external_data() {
@@ -1245,46 +1295,53 @@ impl State {
       t("instance-data-internal")
     };
 
-    let mut form = column![
+    let general = column![
       widget::field(
         t("instances-name"),
-        text_input("", &f.name)
+        widget::input("", &f.name)
           .on_input(Message::FormName)
           .padding(8),
         None
       ),
       widget::field(
         t("instances-game-version"),
-        pick_list(game_choices(shared), f.game.clone(), Message::FormGame)
-          .placeholder(t("instances-pick-game")),
+        widget::select(game_choices(shared), f.game.clone(), Message::FormGame)
+          .placeholder(t("instances-pick-game"))
+          .width(Fill),
         None
       ),
       widget::field(
         t("instance-account"),
-        pick_list(accounts, f.account.clone(), Message::FormAccount),
+        widget::select(accounts, f.account.clone(), Message::FormAccount)
+          .width(Fill),
         Some(t("instance-account-hint"))
       ),
       widget::field(
+        t("instance-wrapper"),
+        widget::input("gamemoderun", &f.wrapper)
+          .on_input(Message::FormWrapper)
+          .padding(8),
+        Some(t("instance-wrapper-hint"))
+      ),
+      widget::field(
         t("instance-args"),
-        text_input("--connect server.example:42420", &f.args)
+        widget::input("--connect server.example:42420", &f.args)
           .on_input(Message::FormArgs)
           .padding(8),
         Some(t("instance-args-hint"))
       ),
+    ]
+    .spacing(16)
+    .width(Fill);
+    let environment = column![
       widget::field(
         t("instance-env"),
         text_editor(&f.env)
+          .style(style::editor)
           .on_action(Message::FormEnv)
-          .height(90)
+          .height(110)
           .placeholder("KEY=value"),
         Some(t("instance-env-hint"))
-      ),
-      widget::field(
-        t("instance-wrapper"),
-        text_input("gamemoderun", &f.wrapper)
-          .on_input(Message::FormWrapper)
-          .padding(8),
-        Some(t("instance-wrapper-hint"))
       ),
       widget::field(
         t("instance-mods-dir"),
@@ -1297,15 +1354,19 @@ impl State {
           text(instance.data_dir().display().to_string())
             .size(13)
             .width(Fill),
-          button(text(t("common-open-folder")).size(13))
-            .style(button::text)
-            .on_press(Message::Open(Folder::Data)),
+          widget::icon_button(
+            Icon::Folder,
+            t("common-open-folder"),
+            Some(Message::Open(Folder::Data))
+          ),
         ]
         .align_y(Center),
         Some(data_hint)
       ),
     ]
-    .spacing(16);
+    .spacing(16)
+    .width(Fill);
+    let mut form = column![row![general, environment].spacing(32)].spacing(16);
     if let Some(error) = &f.error {
       form = form.push(widget::notice(text(error.clone()), Tone::Bad));
     }
@@ -1326,9 +1387,7 @@ impl State {
       .spacing(8),
     );
 
-    scrollable(widget::card(form.max_width(720)))
-      .height(Fill)
-      .into()
+    scrollable(column![widget::card(form)]).height(Fill).into()
   }
 
   fn confirm_view<'a>(
@@ -1388,7 +1447,7 @@ impl State {
           column![
             widget::field(
               t("instances-name"),
-              text_input("", name)
+              widget::input("", name)
                 .on_input(Message::CloneName)
                 .on_submit(Message::Confirmed)
                 .padding(8),
@@ -1400,7 +1459,7 @@ impl State {
           ]
           .spacing(12),
           row![
-            widget::secondary(t("common-cancel"), Some(Message::CloseConfirm)),
+            widget::ghost(t("common-cancel"), Some(Message::CloseConfirm)),
             widget::action(
               t("instance-clone"),
               String::new(),
@@ -1426,7 +1485,7 @@ impl State {
           ]
           .spacing(12),
           row![
-            widget::secondary(t("common-cancel"), Some(Message::CloseConfirm)),
+            widget::ghost(t("common-cancel"), Some(Message::CloseConfirm)),
             widget::action(
               t("instance-export-save"),
               String::new(),
@@ -1488,33 +1547,29 @@ fn mod_row<'a>(
         .then(|| Message::Pin(id.clone(), Some(m.info.version.clone())))
     },
   };
-  let pin_label = if m.lock.pin.is_some() {
-    t("instance-unpin")
+  let (pin_icon, pin_label) = if m.lock.pin.is_some() {
+    (Icon::Unpin, t("instance-unpin"))
   } else {
-    t("instance-pin")
+    (Icon::Pin, t("instance-pin"))
   };
 
   let mut actions = row![].spacing(2).align_y(Center);
   if update.is_some() {
-    actions = actions.push(
-      button(text(t("instance-update")).size(13))
-        .style(button::text)
-        .on_press_maybe((!busy).then(|| Message::UpdateOne(id.clone()))),
-    );
+    actions = actions.push(widget::icon_button(
+      Icon::Update,
+      t("instance-update"),
+      (!busy).then(|| Message::UpdateOne(id.clone())),
+    ));
   }
   actions = actions
-    .push(
-      button(text(pin_label).size(13))
-        .style(button::text)
-        .on_press_maybe(pin),
-    )
-    .push(
-      button(text(t("common-remove")).size(13))
-        .style(button::text)
-        .on_press_maybe((!busy).then(|| Message::AskRemove(id.clone()))),
-    );
+    .push(widget::icon_button(pin_icon, pin_label, pin))
+    .push(widget::icon_button(
+      Icon::Trash,
+      t("common-remove"),
+      (!busy).then(|| Message::AskRemove(id.clone())),
+    ));
 
-  widget::card(
+  container(
     row![
       checkbox(m.enabled).on_toggle_maybe((!busy).then(|| {
         let id = id.clone();
@@ -1535,7 +1590,7 @@ fn mod_row<'a>(
     .spacing(12)
     .align_y(Center),
   )
-  .padding([10, 14])
+  .padding([8, 14])
   .into()
 }
 
@@ -1652,7 +1707,7 @@ mod tests {
     let _ = state.update(Message::AskRemove("lib".into()), &mut shared);
     match &state.confirm {
       Some(Confirm::RemoveMod { dependents, .. }) => {
-        assert_eq!(dependents, &["App".to_string()])
+        assert_eq!(dependents, &["App".to_string()]);
       },
       other => panic!("unexpected {other:?}"),
     }
