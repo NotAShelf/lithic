@@ -448,14 +448,14 @@ pub fn problems(mods: &[InstalledMod]) -> Vec<Problem> {
           out.push(Problem::DisabledDependency {
             mod_id:     m.mod_id().to_string(),
             dependency: dep.clone(),
-          })
+          });
         },
         (None, true) => {
           out.push(Problem::MissingDependency {
             mod_id:     m.mod_id().to_string(),
             dependency: dep.clone(),
             required:   required.clone(),
-          })
+          });
         },
       }
     }
