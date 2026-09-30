@@ -11,11 +11,11 @@ you can use whichever suits the moment.
 <!--markdownlint-disable MD033-->
 
 <p align="center">
-  <img alt="An instance in lithic, with its mods" src="./assets/instance.png" width="850px">
-</p>
-
-<p align="center">
-  <img alt="Lithic mod browser in Catppuccin Latte, Frappé, Macchiato, and Mocha" src="./assets/composite.png" width="850px">
+  <img
+    alt="Lithic mod browser in Catppuccin Latte, Frappé, Macchiato, and Mocha"
+    src="./assets/composite.png"
+    width="850px"
+  >
 </p>
 
 <!--markdownlint-enable MD033-->
@@ -56,6 +56,87 @@ game versions, and modpacks. See the [usage guide](USAGE.md) for first-time
 setup and common workflows. You can also find instructions about migrating from
 Lithic v1.x here.
 
+## Demo
+
+<!--markdownlint-disable MD033-->
+<details>
+<summary>More screenshots</summary>
+
+<p align="center">
+  <strong>Lithic Light and Dark</strong><br>
+  <img
+    alt="Lithic mod browser in Light and Dark"
+    src="./assets/light-dark.png"
+    width="850px"
+  >
+</p>
+
+<p align="center">
+  <strong>Instance</strong><br>
+  <img
+    alt="Instance with installed mods in Lithic Dark"
+    src="./assets/instance.png"
+    width="850px"
+  >
+</p>
+
+<p align="center">
+  <strong>Browse mods</strong><br>
+  <img
+    alt="Mod browser in Lithic Dark"
+    src="./assets/browse.png"
+    width="850px"
+  >
+</p>
+
+<p align="center">
+  <strong>Catppuccin Latte</strong><br>
+  <img
+    alt="Mod browser in Catppuccin Latte"
+    src="./assets/latte.png"
+    width="850px"
+  >
+</p>
+
+<p align="center">
+  <strong>Catppuccin Frappé</strong><br>
+  <img
+    alt="Mod browser in Catppuccin Frappé"
+    src="./assets/frappe.png"
+    width="850px"
+  >
+</p>
+
+<p align="center">
+  <strong>Catppuccin Macchiato</strong><br>
+  <img
+    alt="Mod browser in Catppuccin Macchiato"
+    src="./assets/macchiato.png"
+    width="850px"
+  >
+</p>
+
+<p align="center">
+  <strong>Catppuccin Mocha</strong><br>
+  <img
+    alt="Mod browser in Catppuccin Mocha"
+    src="./assets/mocha.png"
+    width="850px"
+  >
+</p>
+
+<p align="center">
+  <strong>All four Catppuccin variants</strong><br>
+  <img
+    alt="Mod browser in Catppuccin Latte, Frappé, Macchiato, and Mocha"
+    src="./assets/composite.png"
+    width="850px"
+  >
+</p>
+
+</details>
+<!--markdownlint-enable MD033-->
+
 ## License
 
 [@Tekunogosu/rustique]: https://github.com/Tekunogosu/rustique
@@ -67,5 +148,6 @@ are distributed under the Mozilla Public License (MPL) version 2.0. See
 [LICENSE](../LICENSE) for more details on the exact conditions. An online copy
 is [provided here](https://www.mozilla.org/en-US/MPL/2.0/).
 
-The GUI icons are from Lucide, licensed under ISC. Their license is in
+The icons all across the UI are from Lucide, which is licensed under ISC. The
+upstream license is provided in
 [`crates/lithic-icons/assets/icons/LICENSE`](../crates/lithic-icons/assets/icons/LICENSE).
