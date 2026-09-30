@@ -21,17 +21,7 @@ use iced::{
   Theme,
   stream,
   time,
-  widget::{
-    button,
-    column,
-    container,
-    pick_list,
-    row,
-    scrollable,
-    space,
-    stack,
-    text,
-  },
+  widget::{button, column, container, row, scrollable, space, stack, text},
   window,
 };
 use lithic_core::{
@@ -994,9 +984,12 @@ impl App {
               .style(style::muted),
           ]
           .spacing(12),
-          button(text(t("common-ok")))
-            .padding([8, 16])
-            .on_press(Message::CloseDialog),
+          widget::action(
+            t("common-ok"),
+            String::new(),
+            false,
+            Some(Message::CloseDialog),
+          ),
           620.0,
         )
       },
@@ -1008,9 +1001,12 @@ impl App {
             text(error).size(13).style(style::muted)
           ]
           .spacing(12),
-          button(text(t("common-ok")))
-            .padding([8, 16])
-            .on_press(Message::CloseDialog),
+          widget::action(
+            t("common-ok"),
+            String::new(),
+            false,
+            Some(Message::CloseDialog),
+          ),
           560.0,
         )
       },
@@ -1045,9 +1041,7 @@ impl App {
               text(t("link-no-instances")).style(style::muted)
             ]
             .spacing(12),
-            button(text(t("common-close")))
-              .padding([8, 16])
-              .on_press(Message::CloseDialog),
+            widget::secondary(t("common-close"), Some(Message::CloseDialog)),
             480.0,
           );
         }
@@ -1076,13 +1070,13 @@ impl App {
             text(what),
             widget::field(
               t("link-into"),
-              pick_list(choices, selected, Message::LinkTarget),
+              widget::select(choices, selected, Message::LinkTarget),
               None
             ),
           ]
           .spacing(12),
           row![
-            widget::secondary(t("common-cancel"), Some(Message::CloseDialog)),
+            widget::ghost(t("common-cancel"), Some(Message::CloseDialog)),
             widget::action(
               t("browse-install"),
               String::new(),
