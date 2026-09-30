@@ -1,28 +1,22 @@
-use std::{collections::HashMap, fmt, sync::LazyLock};
+use std::{collections::HashMap, fmt};
 
 use iced::{
   Center,
-  Color,
   Element,
   Fill,
   Length,
   Task,
-  Theme,
   alignment::Horizontal,
   widget::{
     button,
     column,
     container,
     image,
-    pick_list,
     row,
     scrollable,
     space,
-    svg,
     text,
-    text_input,
     toggler,
-    tooltip,
   },
 };
 use lithic_core::{
@@ -43,24 +37,14 @@ use super::format_count;
 use crate::{
   app::{Message as AppMessage, OpKind, Outcome, Shared, Summary},
   i18n::{t, t1, t2},
-  style::{self, Tone},
+  icon::{self, Icon},
+  style::{self, Kind, Tone},
   task::blocking,
   widget,
 };
 
 const PAGE: usize = 40;
-const INSTALL_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 17v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>"#;
-static INSTALL_HANDLE: LazyLock<svg::Handle> =
-  LazyLock::new(|| svg::Handle::from_memory(INSTALL_SVG));
-const UPDATE_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 1-2.5-5.8M20 4v6h-6"/></svg>"#;
-static UPDATE_HANDLE: LazyLock<svg::Handle> =
-  LazyLock::new(|| svg::Handle::from_memory(UPDATE_SVG));
-const STAR_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="m12 2.5 2.9 6.1 6.7 1-4.8 4.7 1.1 6.7-5.9-3.2-5.9 3.2 1.1-6.7-4.8-4.7 6.7-1z"/></svg>"#;
-static STAR_HANDLE: LazyLock<svg::Handle> =
-  LazyLock::new(|| svg::Handle::from_memory(STAR_SVG));
-const STAR_FILLED_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="m12 2.5 2.9 6.1 6.7 1-4.8 4.7 1.1 6.7-5.9-3.2-5.9 3.2 1.1-6.7-4.8-4.7 6.7-1z"/></svg>"#;
-static STAR_FILLED_HANDLE: LazyLock<svg::Handle> =
-  LazyLock::new(|| svg::Handle::from_memory(STAR_FILLED_SVG));
+const ACTIONS_WIDTH: f32 = 104.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SortChoice(Sort);
@@ -101,8 +85,9 @@ impl fmt::Display for TargetChoice {
   }
 }
 
+/// A mod logo, cached in [`Shared`] so every browse view reuses downloads.
 #[derive(Debug, Clone)]
-enum Logo {
+pub enum Logo {
   Loading,
   Ready(image::Handle),
   Failed,
@@ -120,7 +105,16 @@ struct Details {
 type PoolKey = Option<(u64, u64)>;
 
 #[derive(Debug)]
+#[expect(
+  clippy::struct_excessive_bools,
+  reason = "the filters are independent toggles the user flips"
+)]
 pub struct State {
+  /// Wraps this view's messages, so it can live on its own page or inside
+  /// an instance.
+  wrap:           fn(Message) -> AppMessage,
+  /// Installs always go into `target`; the instance picker is hidden.
+  locked:         bool,
   target:         Option<String>,
   query:          String,
   sort:           SortChoice,
@@ -134,13 +128,14 @@ pub struct State {
   shown:          usize,
   installed:      HashMap<String, String>,
   updates:        HashMap<String, Update>,
-  logos:          HashMap<String, Logo>,
   details:        Option<Details>,
 }
 
 impl Default for State {
   fn default() -> Self {
     Self {
+      wrap:           AppMessage::Browse,
+      locked:         false,
       target:         None,
       query:          String::new(),
       sort:           SortChoice(Sort::Downloads),
@@ -154,7 +149,6 @@ impl Default for State {
       shown:          PAGE,
       installed:      HashMap::new(),
       updates:        HashMap::new(),
-      logos:          HashMap::new(),
       details:        None,
     }
   }
@@ -188,7 +182,7 @@ pub fn enter(state: &State, shared: &Shared) -> Task<AppMessage> {
   let key = state.wanted_key(shared);
   let mut tasks = vec![refresh_installed(state, shared)];
   if state.pool_key != Some(key) || matches!(state.pool, Some(Err(_))) {
-    tasks.push(Task::done(AppMessage::Browse(Message::Refresh)));
+    tasks.push(Task::done((state.wrap)(Message::Refresh)));
   }
   Task::batch(tasks)
 }
@@ -207,6 +201,7 @@ pub fn refresh_installed(state: &State, shared: &Shared) -> Task<AppMessage> {
   let update_id = id.clone();
   let updates_target = Some(id.clone());
   let update_reader = lithic.clone();
+  let wrap = state.wrap;
   Task::batch([
     Task::perform(
       blocking(move || {
@@ -219,7 +214,7 @@ pub fn refresh_installed(state: &State, shared: &Shared) -> Task<AppMessage> {
             .collect(),
         )
       }),
-      move |r| AppMessage::Browse(Message::Installed(installed_target, r)),
+      move |r| wrap(Message::Installed(installed_target, r)),
     ),
     Task::perform(
       async move {
@@ -240,7 +235,7 @@ pub fn refresh_installed(state: &State, shared: &Shared) -> Task<AppMessage> {
           .collect();
         Ok(updates)
       },
-      move |r| AppMessage::Browse(Message::Updates(updates_target, r)),
+      move |r| wrap(Message::Updates(updates_target, r)),
     ),
   ])
 }
@@ -316,7 +311,7 @@ impl State {
     self.shown = PAGE;
   }
 
-  fn load_logos(&mut self, shared: &Shared) -> Task<AppMessage> {
+  fn load_logos(&self, shared: &mut Shared) -> Task<AppMessage> {
     let Some(Ok(pool)) = &self.pool else {
       return Task::none();
     };
@@ -325,14 +320,24 @@ impl State {
       .iter()
       .take(self.shown)
       .filter_map(|&i| pool[i].logo.clone())
-      .filter(|url| !self.logos.contains_key(url))
+      .filter(|url| !shared.logos.contains_key(url))
       .collect();
     let mut tasks = Vec::new();
     for url in wanted {
-      self.logos.insert(url.clone(), Logo::Loading);
-      tasks.push(logo_task(shared.lithic.http.clone(), url));
+      shared.logos.insert(url.clone(), Logo::Loading);
+      tasks.push(logo_task(shared.lithic.http.clone(), url, self.wrap));
     }
     Task::batch(tasks)
+  }
+
+  /// A browse view inside an instance page that installs only into `id`.
+  pub fn for_instance(id: &str, wrap: fn(Message) -> AppMessage) -> Self {
+    Self {
+      wrap,
+      locked: true,
+      target: Some(id.to_string()),
+      ..Self::default()
+    }
   }
 
   pub fn update(
@@ -340,8 +345,12 @@ impl State {
     message: Message,
     shared: &mut Shared,
   ) -> Task<AppMessage> {
+    let wrap = self.wrap;
     match message {
       Message::Target(choice) => {
+        if self.locked {
+          return Task::none();
+        }
         self.set_target(Some(choice.id), shared);
         return enter(self, shared);
       },
@@ -409,7 +418,7 @@ impl State {
             };
             result.map_err(|e| e.to_string())
           },
-          move |r| AppMessage::Browse(Message::PoolLoaded(request, key, r)),
+          move |r| wrap(Message::PoolLoaded(request, key, r)),
         );
       },
       Message::PoolLoaded(request, key, result) => {
@@ -455,7 +464,7 @@ impl State {
       Message::Logo(url, bytes) => {
         let logo = bytes
           .map_or(Logo::Failed, |b| Logo::Ready(image::Handle::from_bytes(b)));
-        self.logos.insert(url, logo);
+        shared.logos.insert(url, logo);
       },
       Message::More => {
         self.shown += PAGE;
@@ -483,7 +492,7 @@ impl State {
               }
             })
           }),
-          |r| AppMessage::Browse(Message::FavoriteSaved(r)),
+          move |r| wrap(Message::FavoriteSaved(r)),
         );
       },
       Message::FavoriteSaved(Ok(())) => {},
@@ -576,7 +585,7 @@ impl State {
               .map(Box::new)
               .map_err(|e| e.to_string())
           },
-          move |r| AppMessage::Browse(Message::DetailsLoaded(id, r)),
+          move |r| wrap(Message::DetailsLoaded(id, r)),
         );
       },
       Message::DetailsLoaded(id, result) => {
@@ -595,6 +604,7 @@ impl State {
     Task::none()
   }
 
+  /// The Browse page, with the instance to install into in its header.
   pub fn view<'a>(&'a self, shared: &'a Shared) -> Element<'a, Message> {
     let targets: Vec<TargetChoice> = shared
       .instances
@@ -609,6 +619,30 @@ impl State {
     let target = self
       .target_id(shared)
       .and_then(|id| targets.iter().find(|c| c.id == id).cloned());
+    let picker: Element<Message> = if targets.is_empty() {
+      space().into()
+    } else {
+      widget::tip(
+        row![
+          icon::icon(Icon::Instances, 18.0),
+          widget::select(targets, target, Message::Target)
+            .placeholder(t("browse-pick-instance"))
+            .padding([7, 12]),
+        ]
+        .spacing(8)
+        .align_y(Center),
+        t("browse-install-into"),
+      )
+    };
+    let page = widget::page(t("nav-browse"), picker, self.content(shared));
+    match self.details(shared) {
+      Some(details) => widget::modal(page, details, Message::CloseDetails),
+      None => page,
+    }
+  }
+
+  /// Search controls and results, without a page frame.
+  pub fn content<'a>(&'a self, shared: &'a Shared) -> Element<'a, Message> {
     let game = self.target_game(shared);
     let compatible_label = match game.and_then(version::minor) {
       Some((a, b)) => {
@@ -617,45 +651,48 @@ impl State {
       None => t("browse-compatible"),
     };
 
+    let mut filters = row![
+      toggler(self.compatible && game.is_some())
+        .label(compatible_label)
+        .on_toggle_maybe(
+          game
+            .is_some()
+            .then_some(Message::Compatible as fn(bool) -> Message)
+        ),
+      toggler(self.favorites_only)
+        .label(t("browse-favorites-only"))
+        .on_toggle(Message::FavoritesOnly),
+      toggler(self.hide_installed)
+        .label(t("browse-hide-installed"))
+        .on_toggle(Message::HideInstalled),
+      space::horizontal(),
+    ]
+    .spacing(24)
+    .align_y(Center);
+    if let Some(Ok(_)) = &self.pool {
+      filters = filters.push(
+        text(t1("browse-result-count", "count", self.results.len()))
+          .size(12)
+          .style(style::muted),
+      );
+    }
     let controls = column![
       row![
-        text_input(&t("browse-search"), &self.query)
+        widget::input(&t("browse-search"), &self.query)
           .on_input(Message::Query)
           .padding([9, 12])
           .width(Fill),
-        pick_list(SortChoice::ALL, Some(self.sort), Message::Sort)
+        widget::select(SortChoice::ALL, Some(self.sort), Message::Sort)
           .padding([9, 12]),
-        button(text(t("common-refresh")))
-          .padding([9, 12])
-          .style(style::nav(false))
-          .on_press(Message::Refresh),
+        widget::icon_button(
+          Icon::Refresh,
+          t("common-refresh"),
+          Some(Message::Refresh)
+        ),
       ]
       .spacing(8)
       .align_y(Center),
-      row![
-        text(t("browse-install-into")).size(13),
-        pick_list(targets, target, Message::Target)
-          .placeholder(t("browse-pick-instance")),
-      ]
-      .spacing(12)
-      .align_y(Center),
-      row![
-        toggler(self.compatible && game.is_some())
-          .label(compatible_label)
-          .on_toggle_maybe(
-            game
-              .is_some()
-              .then_some(Message::Compatible as fn(bool) -> Message)
-          ),
-        toggler(self.favorites_only)
-          .label(t("browse-favorites-only"))
-          .on_toggle(Message::FavoritesOnly),
-        toggler(self.hide_installed)
-          .label(t("browse-hide-installed"))
-          .on_toggle(Message::HideInstalled),
-      ]
-      .spacing(24)
-      .align_y(Center),
+      filters,
     ]
     .spacing(10);
 
@@ -682,7 +719,7 @@ impl State {
           row![
             text(t("browse-mod-heading")).width(Fill),
             text(t("browse-downloads-heading")).width(76),
-            space().width(152),
+            space().width(ACTIONS_WIDTH),
           ]
           .spacing(12),
         )
@@ -701,42 +738,39 @@ impl State {
       },
     };
 
-    let mut body = column![controls].spacing(12);
+    let mut body = column![controls].spacing(12).height(Fill);
     if shared.instances.is_empty() {
       body =
         body.push(widget::notice(text(t("browse-no-instances")), Tone::Warn));
     }
-    if let Some(b) = busy {
+    if let Some(b) = busy
+      && !self.locked
+    {
       body = body.push(widget::notice(text(b.label()), Tone::Neutral));
     }
-    if let Some(Ok(_)) = &self.pool {
-      body = body.push(
-        text(t1("browse-result-count", "count", self.results.len()))
-          .size(12)
-          .style(style::muted),
-      );
-    }
-    body = body.push(list);
+    body.push(list).into()
+  }
 
-    let page = widget::page(t("nav-browse"), space(), body);
-    match &self.details {
-      Some(d) => {
-        widget::modal(
-          page,
-          self.details_view(d, shared, busy.is_some()),
-          Message::CloseDetails,
-        )
-      },
-      None => page,
-    }
+  /// The open mod's details, to lay over whatever holds this view.
+  pub fn details<'a>(
+    &'a self,
+    shared: &'a Shared,
+  ) -> Option<Element<'a, Message>> {
+    let busy = self
+      .target_id(shared)
+      .is_some_and(|id| shared.busy.contains_key(id));
+    self
+      .details
+      .as_ref()
+      .map(|d| self.details_view(d, shared, busy))
   }
 
   fn logo<'a>(
-    &'a self,
+    shared: &'a Shared,
     url: Option<&'a String>,
     size: f32,
   ) -> Element<'a, Message> {
-    match url.and_then(|u| self.logos.get(u)) {
+    match url.and_then(|u| shared.logos.get(u)) {
       Some(Logo::Ready(handle)) => {
         image(handle.clone()).width(size).height(size).into()
       },
@@ -744,7 +778,7 @@ impl State {
         container(space())
           .width(size)
           .height(size)
-          .style(style::badge(Tone::Neutral))
+          .style(style::placeholder)
           .into()
       },
     }
@@ -782,11 +816,6 @@ impl State {
     let can_act = !busy
       && self.target_id(shared).is_some()
       && (installed.is_none() || update.is_some());
-    let icon = if update.is_some() {
-      (*UPDATE_HANDLE).clone()
-    } else {
-      (*INSTALL_HANDLE).clone()
-    };
     let label = match (installed, update) {
       (Some(_), Some(u)) => {
         t1(
@@ -798,77 +827,50 @@ impl State {
       (Some(_), None) => t("mods-already-installed"),
       (None, _) => t("browse-install"),
     };
-    let action: Element<Message> =
-      tooltip(
-        button(svg(icon).width(20).height(20).style(
-          move |theme: &Theme, _| {
-            let p = theme.extended_palette();
-            let text = p.background.base.text;
-            let color = if can_act {
-              text
-            } else {
-              let bg = p.background.weakest.color;
-              Color::from_rgb(
-                bg.r.mul_add(0.65, text.r * 0.35),
-                bg.g.mul_add(0.65, text.g * 0.35),
-                bg.b.mul_add(0.65, text.b * 0.35),
-              )
-            };
-            svg::Style { color: Some(color) }
-          },
-        ))
-        .width(36)
-        .height(36)
-        .padding(8)
-        .style(style::nav(false))
-        .on_press_maybe(can_act.then(|| {
-          update.map_or_else(
-            || Message::Install(mod_id.clone(), None),
-            |u| Message::Update(u.mod_id.clone()),
-          )
-        })),
-        text(label).size(13),
-        tooltip::Position::Top,
-      )
-      .style(container::rounded_box)
-      .into();
-    let star = if favorite {
-      (*STAR_FILLED_HANDLE).clone()
-    } else {
-      (*STAR_HANDLE).clone()
-    };
-    let favorite_action =
-      tooltip(
-        button(svg(star).width(20).height(20).style(
-          move |theme: &Theme, _| {
-            let p = theme.extended_palette();
-            svg::Style {
-              color: Some(if favorite {
-                p.warning.base.color
-              } else {
-                p.background.base.text
-              }),
-            }
-          },
-        ))
-        .width(36)
-        .height(36)
-        .padding(8)
-        .style(style::nav(false))
-        .on_press(Message::Favorite(mod_id)),
-        text(t(if favorite {
-          "browse-unfavorite"
+    let action = widget::icon_button(
+      if update.is_some() {
+        Icon::Update
+      } else {
+        Icon::Download
+      },
+      label,
+      can_act.then(|| {
+        update.map_or_else(
+          || Message::Install(mod_id.clone(), None),
+          |u| Message::Update(u.mod_id.clone()),
+        )
+      }),
+    );
+    let favorite_action = widget::tip(
+      button(icon::colored(
+        if favorite {
+          Icon::StarFilled
         } else {
-          "browse-favorite"
-        }))
-        .size(13),
-        tooltip::Position::Top,
-      )
-      .style(container::rounded_box);
+          Icon::Star
+        },
+        18.0,
+        move |theme| {
+          let p = theme.extended_palette();
+          if favorite {
+            p.warning.base.color
+          } else {
+            p.background.base.text
+          }
+        },
+      ))
+      .padding(7)
+      .style(style::btn(Kind::Ghost))
+      .on_press(Message::Favorite(mod_id)),
+      t(if favorite {
+        "browse-unfavorite"
+      } else {
+        "browse-favorite"
+      }),
+    );
 
     container(
       row![
-        self.logo(m.logo.as_ref(), 40.0),
+        Self::logo(shared, m.logo.as_ref(), 40.0),
         column![
           text(&m.name).size(15).font(widget::bold()),
           text(meta).size(12).style(style::muted),
@@ -882,17 +884,17 @@ impl State {
           .width(76)
           .align_x(Horizontal::Right),
         row![
-          button(text(t("browse-details")).size(13))
-            .width(Length::Fixed(64.0))
-            .padding([8, 4])
-            .style(button::text)
-            .on_press(Message::OpenDetails(index)),
+          widget::icon_button(
+            Icon::Info,
+            t("browse-details"),
+            Some(Message::OpenDetails(index))
+          ),
           action,
           favorite_action,
         ]
-        .spacing(8)
+        .spacing(4)
         .align_y(Center)
-        .width(Length::Fixed(152.0)),
+        .width(Length::Fixed(ACTIONS_WIDTH)),
       ]
       .spacing(12)
       .align_y(Center),
@@ -912,7 +914,7 @@ impl State {
     let m = &d.summary;
     let mod_id = m.mod_ids.first().cloned().unwrap_or_default();
     let header = row![
-      self.logo(m.logo.as_ref(), 72.0),
+      Self::logo(shared, m.logo.as_ref(), 72.0),
       column![
         text(&m.name).size(22).font(widget::bold()),
         text(t1("browse-by", "author", m.author.clone()))
@@ -960,16 +962,19 @@ impl State {
                   ),
               })
               .width(Fill),
-              button(text(if update.is_some() {
-                t("instance-update")
-              } else if installed.is_some() {
-                t("mods-already-installed")
-              } else {
-                t("browse-install")
-              }))
-              .padding([6, 14])
-              .style(button::primary)
-              .on_press_maybe(
+              widget::primary_icon(
+                if update.is_some() {
+                  Icon::Update
+                } else {
+                  Icon::Download
+                },
+                if update.is_some() {
+                  t("instance-update")
+                } else if installed.is_some() {
+                  t("mods-already-installed")
+                } else {
+                  t("browse-install")
+                },
                 (!busy
                   && self.target_id(shared).is_some()
                   && (installed.is_none() || update.is_some()))
@@ -1017,12 +1022,12 @@ impl State {
               .size(12)
               .style(style::muted)
               .width(Fill),
-            button(text(t("browse-install-version")).size(12))
-              .style(button::text)
-              .on_press_maybe(
-                (!busy && self.target_id(shared).is_some() && !v.is_empty())
-                  .then(|| Message::Install(mod_id.clone(), Some(v.clone()))),
-              ),
+            widget::icon_button(
+              Icon::Download,
+              t("browse-install-version"),
+              (!busy && self.target_id(shared).is_some() && !v.is_empty())
+                .then(|| Message::Install(mod_id.clone(), Some(v.clone()))),
+            ),
           ]
           .spacing(8)
           .align_y(Center)
@@ -1041,9 +1046,13 @@ impl State {
           ),
           links,
           text(d.description.clone()).size(13),
-          text(t("browse-releases")).font(widget::bold()),
+          row![
+            text(t("browse-releases")).font(widget::bold()),
+            widget::hint(t("browse-pin-hint")),
+          ]
+          .spacing(6)
+          .align_y(Center),
           releases,
-          text(t("browse-pin-hint")).size(12).style(style::muted),
         ]
         .spacing(12)
         .into()
@@ -1064,11 +1073,15 @@ impl State {
   }
 }
 
-fn logo_task(http: Http, url: String) -> Task<AppMessage> {
+fn logo_task(
+  http: Http,
+  url: String,
+  wrap: fn(Message) -> AppMessage,
+) -> Task<AppMessage> {
   let key = url.clone();
   Task::perform(
     async move { http.get_bytes(&url).await.ok() },
-    move |bytes| AppMessage::Browse(Message::Logo(key, bytes)),
+    move |bytes| wrap(Message::Logo(key, bytes)),
   )
 }
 
@@ -1176,6 +1189,20 @@ mod tests {
     assert_eq!(state.results, [1]);
     let _ = state.update(Message::HideInstalled(false), &mut shared);
     assert_eq!(state.results, [0, 1]);
+  }
+
+  #[test]
+  fn locked_view_keeps_its_instance() {
+    let (_dir, mut shared) = shared();
+    let mut state = State::for_instance("main", AppMessage::Browse);
+    let _ = state.update(
+      Message::Target(TargetChoice {
+        id:   "other".into(),
+        name: "Other".into(),
+      }),
+      &mut shared,
+    );
+    assert_eq!(state.target.as_deref(), Some("main"));
   }
 
   #[test]
