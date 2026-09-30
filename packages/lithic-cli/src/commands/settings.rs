@@ -201,7 +201,7 @@ fn set(
 
   match key {
     "mods.allow_prerelease" => {
-      s.mods.allow_prerelease = flag(value, d.mods.allow_prerelease)?
+      s.mods.allow_prerelease = flag(value, d.mods.allow_prerelease)?;
     },
     "mods.index_max_age_hours" => {
       let n = number(value, u64::from(d.mods.index_max_age_hours), 1)?;

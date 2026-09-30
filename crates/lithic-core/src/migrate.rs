@@ -473,13 +473,13 @@ impl Lithic {
           notes.push(Note::GameInstall {
             version: version.clone(),
             path:    p.clone(),
-          })
+          });
         },
         None => {
           notes.push(Note::GameInstallMissing {
             version: version.clone(),
             path:    path.clone(),
-          })
+          });
         },
       }
       out.push(Install {

@@ -361,7 +361,7 @@ impl Lithic {
                 _ => None,
               },
               error,
-            })
+            });
           },
           Ok(None) => {
             if job.reason == Reason::Requested {

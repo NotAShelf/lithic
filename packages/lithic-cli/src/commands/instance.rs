@@ -282,7 +282,7 @@ async fn create(ctx: &Ctx, args: InstanceCreateArgs) -> Result {
       ctx.ui.status(format!(
         "Set its game version with `lithic instance edit {} --game <version>`",
         instance.id
-      ))
+      ));
     },
   }
   Ok(())

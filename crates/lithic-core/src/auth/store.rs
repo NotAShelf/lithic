@@ -70,7 +70,7 @@ impl SessionStore {
       Err(e) => {
         tracing::warn!(
           "keyring unavailable, storing the session in a private file: {e}"
-        )
+        );
       },
     }
     fsutil::write_atomic_with_mode(

@@ -771,7 +771,7 @@ impl App {
 
     match result {
       Ok(Outcome::Mods(summary)) => {
-        tasks.push(self.summary_toasts(&summary, &name, kind))
+        tasks.push(self.summary_toasts(&summary, &name, kind));
       },
       Ok(Outcome::Imported { instance, summary }) => {
         tasks.push(self.summary_toasts(&summary, &name, kind));
@@ -800,7 +800,7 @@ impl App {
             .shared
             .toasts
             .error(t1("op-failed", "name", name), Some(e)),
-        )
+        );
       },
     }
 
