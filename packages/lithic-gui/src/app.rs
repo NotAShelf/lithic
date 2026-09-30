@@ -12,6 +12,8 @@ use futures::{
   channel::mpsc::{Sender, unbounded},
 };
 use iced::{
+  Alignment,
+  Center,
   Element,
   Fill,
   Subscription,
@@ -53,6 +55,7 @@ use tokio::task::spawn_blocking;
 
 use crate::{
   i18n::{t, t1, t2},
+  icon::{self, Icon},
   notify::{self, Notifications},
   screen::{accounts, browse, game, instance, instances, settings},
   style,
@@ -1099,13 +1102,27 @@ impl App {
       Page::Instance(_) => Page::Instances,
       ref p => p.clone(),
     };
-    let item = |label: String, page: Page| {
+    let item = |glyph: Icon, label: String, page: Page| {
       let active = current == page;
-      button(text(label).size(15))
-        .width(Fill)
-        .padding([8, 12])
-        .style(style::nav(active))
-        .on_press(Message::Navigate(page))
+      button(
+        row![
+          icon::colored(glyph, 18.0, move |theme| {
+            let p = theme.extended_palette();
+            if active {
+              p.primary.base.color
+            } else {
+              p.background.base.text
+            }
+          }),
+          text(label).size(15),
+        ]
+        .spacing(10)
+        .align_y(Center),
+      )
+      .width(Fill)
+      .padding([8, 12])
+      .style(style::nav(active))
+      .on_press(Message::Navigate(page))
     };
 
     let account = self
@@ -1113,35 +1130,71 @@ impl App {
       .accounts
       .active
       .as_deref()
-      .and_then(|uid| self.shared.accounts.get(uid))
-      .map_or_else(
-        || t("sidebar-signed-out"),
-        |a| t1("sidebar-signed-in", "name", a.playername.clone()),
-      );
+      .and_then(|uid| self.shared.accounts.get(uid));
     let running = self.shared.running.len();
 
-    let mut col = column![
-      text("lithic").size(22).font(widget::bold()),
+    let nav = column![
+      row![
+        text("lithic").size(22).font(widget::bold()),
+        text(format!("v{}", env!("CARGO_PKG_VERSION")))
+          .size(12)
+          .style(style::muted),
+      ]
+      .spacing(8)
+      .align_y(Alignment::End),
       space().height(12),
-      item(t("nav-instances"), Page::Instances),
-      item(t("nav-browse"), Page::Browse),
-      item(t("nav-games"), Page::Games),
-      item(t("nav-accounts"), Page::Accounts),
-      item(t("nav-settings"), Page::Settings),
-      space::vertical(),
+      item(Icon::Instances, t("nav-instances"), Page::Instances),
+      item(Icon::Browse, t("nav-browse"), Page::Browse),
+      item(Icon::Games, t("nav-games"), Page::Games),
+      item(Icon::Accounts, t("nav-accounts"), Page::Accounts),
+      item(Icon::Settings, t("nav-settings"), Page::Settings),
     ]
-    .spacing(4);
-    if running > 0 {
-      col = col.push(text(t1("sidebar-running", "count", running)).size(12));
-    }
-    col = col.push(text(account).size(12).style(style::muted));
-    col = col.push(
-      text(format!("v{}", env!("CARGO_PKG_VERSION")))
-        .size(11)
-        .style(style::muted),
-    );
+    .spacing(4)
+    .padding(16);
 
-    container(col.padding(16))
+    let mut who = column![
+      text(
+        account
+          .map_or_else(|| t("sidebar-signed-out"), |a| a.playername.clone())
+      )
+      .size(14)
+      .font(widget::bold())
+    ]
+    .spacing(2);
+    let status = if running > 0 {
+      Some(t1("sidebar-running", "count", running))
+    } else {
+      account.map(|a| {
+        t(
+          if self.shared.sessions.contains(&a.uid)
+            && !self.accounts.rejected(&a.uid)
+          {
+            "sidebar-signed-in"
+          } else {
+            "sidebar-sign-in-again"
+          },
+        )
+      })
+    };
+    if let Some(status) = status {
+      who = who.push(text(status).size(12).style(style::muted));
+    }
+    let footer = container(
+      button(
+        row![icon::icon(Icon::User, 20.0), who]
+          .spacing(10)
+          .align_y(Center),
+      )
+      .width(Fill)
+      .padding([6, 8])
+      .style(style::nav(false))
+      .on_press(Message::Navigate(Page::Accounts)),
+    )
+    .width(Fill)
+    .padding([10, 8])
+    .style(style::sidebar_footer);
+
+    container(column![nav, space::vertical(), footer])
       .width(210)
       .height(Fill)
       .style(style::sidebar)

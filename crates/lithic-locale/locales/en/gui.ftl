@@ -7,7 +7,8 @@ nav-browse = Browse mods
 nav-games = Game versions
 nav-accounts = Accounts
 nav-settings = Settings
-sidebar-signed-in = Signed in as { $name }
+sidebar-signed-in = Signed in
+sidebar-sign-in-again = Sign in again
 sidebar-signed-out = Not signed in
 sidebar-running = { $count ->
     [one] 1 game running
