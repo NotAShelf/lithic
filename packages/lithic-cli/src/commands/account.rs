@@ -110,7 +110,7 @@ async fn login(
     return fail("no password given");
   }
 
-  let account = match ctx.lithic.login(&email, &password, None).await {
+  let account = match ctx.lithic.login(&email, &password, None, true).await {
     Ok(account) => account,
     Err(Error::Auth(AuthError::TwoFactorRequired { prelogintoken })) => {
       let code = match code {
@@ -119,7 +119,7 @@ async fn login(
       };
       ctx
         .lithic
-        .login(&email, &password, Some((&prelogintoken, code.trim())))
+        .login(&email, &password, Some((&prelogintoken, code.trim())), true)
         .await?
     },
     Err(e) => return Err(e.into()),

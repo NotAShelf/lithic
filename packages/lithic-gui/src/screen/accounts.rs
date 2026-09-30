@@ -99,7 +99,7 @@ impl State {
         return Task::perform(
           async move {
             let twofa = twofa.as_ref().map(|(tk, c)| (tk.as_str(), c.as_str()));
-            match lithic.login(&email, &password, twofa).await {
+            match lithic.login(&email, &password, twofa, true).await {
               Ok(account) => LoginResult::Done(account),
               Err(Error::Auth(AuthError::TwoFactorRequired {
                 prelogintoken,

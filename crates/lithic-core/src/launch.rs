@@ -14,6 +14,7 @@ use tokio::{process::Command, sync::Notify};
 
 use crate::{
   Lithic,
+  auth::Account,
   error::{Error, IoContext, Kind, Result},
   fsutil::{self, now_ms},
   game,
@@ -149,15 +150,14 @@ impl Lithic {
     })
   }
 
-  /// Starts the game. Returns the session and a future that resolves when
-  /// the game exits; drive the future to have play time recorded.
+  /// Verifies the instance's game session before starting the game. Returns
+  /// the session and a future that resolves when the game exits; drive the
+  /// future to have play time recorded.
   ///
   /// # Errors
-  /// Returns an error if the launch command cannot be built, the mod directory
-  /// or output log cannot be created, account injection fails, or the process
-  /// cannot be started. The returned future reports errors waiting for the
-  /// process.
-  pub fn launch(
+  /// Returns an error if the launch command cannot be built, the account's
+  /// session cannot be verified, or the game cannot be started.
+  pub async fn launch(
     &self,
     instance: &Instance,
   ) -> Result<(
@@ -165,8 +165,39 @@ impl Lithic {
     impl Future<Output = Result<Exit>> + Send + 'static + use<>,
   )> {
     let spec = self.launch_spec(instance)?;
+    self.verify_launch_session(instance).await?;
+    self.spawn_game(instance, &spec)
+  }
+
+  fn spawn_game(
+    &self,
+    instance: &Instance,
+    spec: &LaunchSpec,
+  ) -> Result<(
+    Session,
+    impl Future<Output = Result<Exit>> + Send + 'static + use<>,
+  )> {
     fs::create_dir_all(instance.mods_dir()).at(instance.mods_dir())?;
-    let account = self.inject_account(instance)?;
+    let data_dir = instance.data_dir();
+    // Record the cleanup and arm the guard before any secret is written, so
+    // a failure at any later point cannot leave a session lithic does not
+    // keep in the game's settings.
+    self.start_game_run(&data_dir)?;
+    let planned = self
+      .accounts()?
+      .for_instance(instance.account.as_deref())
+      .cloned();
+    if let Some(a) = &planned
+      && self.is_transient(&a.uid)
+    {
+      self.track_session_cleanup(&data_dir, &a.uid)?;
+    }
+    let mut guard = SessionGuard {
+      lithic:   self.clone(),
+      data_dir: data_dir.clone(),
+      account:  planned,
+    };
+    guard.account = self.inject_account(instance)?;
 
     let logs = instance.logs_dir();
     fs::create_dir_all(&logs).at(&logs)?;
@@ -208,7 +239,6 @@ impl Lithic {
 
     let lithic = self.clone();
     let instance_id = instance.id.clone();
-    let data_dir = instance.data_dir();
     let game_logs = instance.game_logs_dir();
     let waiter = async move {
       let mut stopped = false;
@@ -221,10 +251,10 @@ impl Lithic {
          }
       }
       .at(&log_path)?;
-      if let Some(account) = account
-        && let Err(e) = lithic.sync_game_session(&data_dir, &account)
+      if let Some(account) = guard.account.take()
+        && let Err(e) = lithic.finish_game_session(&data_dir, &account)
       {
-        tracing::warn!("could not save the game login: {e}");
+        tracing::warn!("could not settle the game login: {e}");
       }
       let ended_ms = now_ms();
       if let Err(e) =
@@ -309,6 +339,26 @@ pub fn tail(path: &Path, lines: usize) -> Vec<String> {
     .collect();
   out.reverse();
   out
+}
+
+/// Removes the launch's session from the game settings if lithic does not
+/// keep it and nobody saw the game exit: the launch failed, or the waiter
+/// was dropped because lithic quit while the game kept running.
+struct SessionGuard {
+  lithic:   Lithic,
+  data_dir: PathBuf,
+  /// Taken once the game's exit has been handled.
+  account:  Option<Account>,
+}
+
+impl Drop for SessionGuard {
+  fn drop(&mut self) {
+    if let Some(account) = self.account.take()
+      && let Err(e) = self.lithic.abandon_game_session(&self.data_dir, &account)
+    {
+      tracing::warn!("could not remove the game login: {e}");
+    }
+  }
 }
 
 fn prune_logs(dir: &Path) {
@@ -445,6 +495,12 @@ mod tests {
     assert_eq!(fs::read_dir(d.path()).unwrap().count(), KEPT_LOGS - 1);
   }
 
+  #[tokio::test]
+  async fn launch_without_account_leaves_login_to_the_game() {
+    let (_d, l, i) = setup();
+    l.verify_launch_session(&i).await.unwrap();
+  }
+
   #[cfg(unix)]
   #[tokio::test]
   async fn launch_runs_waits_and_records_play_time() {
@@ -454,7 +510,8 @@ mod tests {
     fs::write(&exe, "#!/bin/sh\necho started \"$1\"\nexit 3\n").unwrap();
     fs::set_permissions(&exe, fs::Permissions::from_mode(0o755)).unwrap();
 
-    let (session, waiter) = l.launch(&i).unwrap();
+    let (session, waiter) =
+      l.spawn_game(&i, &l.launch_spec(&i).unwrap()).unwrap();
     let exit = waiter.await.unwrap();
     assert_eq!(exit.code, Some(3));
     assert!(!exit.success);
@@ -482,14 +539,14 @@ mod tests {
     fs::write(
       &exe,
       "#!/bin/sh\ncat > \"${1#--dataPath=}/clientsettings.json\" \
-       <<'EOF'\n{\"stringSettings\":{\"useridentifier\":\"uid\",\"playername\"\
-       :\"Player\",\"sessionkey\":\"new\",\"sessionsignature\":\"\
-       new-signature\",\"mptoken\":\"new-mp\"}}\nEOF\n",
+       <<'EOF'\n{\"stringSettings\":{\"playeruid\":\"uid\",\"playername\":\"\
+       Player\",\"sessionkey\":\"new\",\"sessionsignature\":\"new-signature\",\
+       \"mptoken\":null}}\nEOF\n",
     )
     .unwrap();
     fs::set_permissions(&exe, fs::Permissions::from_mode(0o755)).unwrap();
 
-    let (_, waiter) = l.launch(&i).unwrap();
+    let (_, waiter) = l.spawn_game(&i, &l.launch_spec(&i).unwrap()).unwrap();
     assert!(waiter.await.unwrap().success);
     let next = l
       .create_instance(NewInstance {
@@ -513,7 +570,8 @@ mod tests {
     let exe = l.game_install("1.21.5").unwrap().path.join("Vintagestory");
     fs::write(&exe, "#!/bin/sh\nexec sleep 30\n").unwrap();
     fs::set_permissions(&exe, fs::Permissions::from_mode(0o755)).unwrap();
-    let (session, waiter) = l.launch(&i).unwrap();
+    let (session, waiter) =
+      l.spawn_game(&i, &l.launch_spec(&i).unwrap()).unwrap();
     let handle = tokio::spawn(waiter);
     session.stop();
     let exit = timeout(Duration::from_secs(10), handle)
@@ -522,5 +580,53 @@ mod tests {
       .unwrap()
       .unwrap();
     assert!(exit.stopped);
+  }
+
+  #[test]
+  fn no_secret_is_written_when_its_cleanup_cannot_be_recorded() {
+    let (_d, l, i) = setup();
+    l.login_once_for_test("u1").unwrap();
+    // A directory where the cleanup list should be makes recording it fail.
+    fs::create_dir_all(l.paths.session_cleanup_file()).unwrap();
+
+    assert!(l.spawn_game(&i, &l.launch_spec(&i).unwrap()).is_err());
+    let settings = i.data_dir().join("clientsettings.json");
+    assert!(
+      fs::read_to_string(&settings).map_or(true, |s| !s.contains("sessionkey"))
+    );
+  }
+
+  #[cfg(unix)]
+  #[tokio::test]
+  async fn process_only_login_leaves_no_session_when_lithic_stops_waiting() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_d, l, i) = setup();
+    let exe = l.game_install("1.21.5").unwrap().path.join("Vintagestory");
+    fs::write(&exe, "#!/bin/sh\nexec sleep 2\n").unwrap();
+    fs::set_permissions(&exe, fs::Permissions::from_mode(0o755)).unwrap();
+    l.login_once_for_test("u1").unwrap();
+
+    let (_session, waiter) =
+      l.spawn_game(&i, &l.launch_spec(&i).unwrap()).unwrap();
+    let settings = i.data_dir().join("clientsettings.json");
+    assert!(
+      fs::read_to_string(&settings)
+        .unwrap()
+        .contains("sessionkey")
+    );
+
+    drop(waiter);
+    assert!(
+      !fs::read_to_string(&settings)
+        .unwrap()
+        .contains("sessionkey"),
+      "quitting lithic must not leave the session behind"
+    );
+    assert!(
+      fs::read_to_string(l.paths.session_cleanup_file())
+        .unwrap()
+        .contains("u1"),
+      "the next start checks again in case the game writes it back"
+    );
   }
 }

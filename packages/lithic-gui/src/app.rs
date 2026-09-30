@@ -746,7 +746,7 @@ impl App {
       let started = async {
         let instance = lithic.instance(&id)?;
         lithic.set_active_instance(Some(&id))?;
-        lithic.launch(&instance)
+        lithic.launch(&instance).await
       }
       .await;
       match started {

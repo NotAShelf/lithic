@@ -17,6 +17,8 @@ pub mod progress;
 pub mod settings;
 pub mod version;
 
+use std::sync::{Arc, Mutex};
+
 pub use error::{Error, Kind, Result};
 use http::Http;
 pub use instance::Instance;
@@ -31,6 +33,8 @@ pub struct Lithic {
   pub paths: Paths,
   pub http:  Http,
   pub moddb: ModDb,
+  /// Sign-ins that last only as long as this process.
+  transient: Arc<Mutex<auth::TransientAccounts>>,
 }
 
 /// Whether to use cached remote data.
@@ -54,17 +58,23 @@ impl Lithic {
       moddb: ModDb::new(http.clone()),
       paths,
       http,
+      transient: Arc::new(Mutex::new(auth::TransientAccounts::default())),
     })
   }
 
-  /// Creates a handle using the configured directories.
+  /// Creates a handle using the configured directories, and removes game
+  /// sessions an earlier run could not (see [`Self::clean_up_sessions`]).
   ///
   /// # Errors
   ///
   /// Returns an error if the directories cannot be resolved or the HTTP
   /// client cannot be built.
   pub fn from_env() -> Result<Self> {
-    Self::new(Paths::from_env()?)
+    let lithic = Self::new(Paths::from_env()?)?;
+    if let Err(e) = lithic.clean_up_sessions() {
+      tracing::warn!("could not remove leftover game logins: {e}");
+    }
+    Ok(lithic)
   }
 
   /// Reads settings, using defaults if no settings file exists.
