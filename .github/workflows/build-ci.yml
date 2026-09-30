@@ -19,7 +19,7 @@ jobs:
       contents: read
     with:
       os: ubuntu-latest
-      rust-toolchain: "1.97.1"
+      rust-toolchain: "nightly-2026-07-17"
       fmt: true
       clippy: true
       clippy-command: nix develop --command cargo clippy --workspace --tests -- -D warnings
@@ -55,7 +55,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.97.1"
+          toolchain: "nightly-2026-07-17"
           targets: ${{ matrix.target }}
 
       - name: Install system dependencies (Linux)
