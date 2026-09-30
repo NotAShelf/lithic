@@ -465,10 +465,11 @@ impl App {
   }
 
   /// Work to do when a page is shown.
-  fn enter(&self, page: &Page) -> Task<Message> {
+  fn enter(&mut self, page: &Page) -> Task<Message> {
     match page {
       Page::Browse => browse::enter(&self.browse, &self.shared),
       Page::Instance(id) => instance::load_mods(&self.shared, id),
+      Page::Accounts => self.accounts.enter(&self.shared),
       _ => Task::none(),
     }
   }
@@ -515,10 +516,14 @@ impl App {
           self.page = Page::Instances;
         }
         self.browse.sync_target(&self.shared);
-        if first_load && self.page == Page::Browse {
-          return browse::enter(&self.browse, &self.shared);
+        if !first_load {
+          return Task::none();
         }
-        Task::none()
+        let check = self.accounts.check_active(&self.shared);
+        if matches!(self.page, Page::Browse | Page::Accounts) {
+          return Task::batch([check, self.enter(&self.page.clone())]);
+        }
+        check
       },
       Message::Loaded(Err(e)) => {
         self.shared.toasts.error(t("load-failed"), Some(e))
