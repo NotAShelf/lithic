@@ -336,22 +336,21 @@ accounts-change-failed = That change could not be made
 
 ## Settings
 
-settings-appearance = Appearance
+settings-general = General
 settings-theme = Theme
 settings-theme-preset = Preset
 settings-theme-preset-pick = Choose a preset
 settings-start-page = Open on
 settings-mods = Mods
 settings-prerelease = Offer pre-release mod versions
-settings-prerelease-hint = When off, versions like 2.0.0-dev.3 are only used if a mod has nothing else for your game version.
+settings-prerelease-hint = When off, versions like 2.0.0-dev.3 are used only if a mod has nothing else for your game version.
 settings-concurrency = Parallel downloads
-settings-backups = Keep a copy of mods before replacing or removing them
-settings-backups-hint = Useful if an update breaks something and you want the old file back.
+settings-backups = Back up mods before replacing or removing them
 settings-backups-keep = Copies to keep per mod
 settings-backups-dir = Backup folder
 settings-storage = Storage
 settings-game-dir = Game versions folder
-settings-game-dir-hint = Where downloaded game versions are unpacked. Existing installs stay where they are.
+settings-game-dir-hint = Where downloaded game versions go. Existing installs are not moved.
 settings-path-config = Settings and accounts
 settings-path-data = Instances and games
 settings-path-cache = Downloads and caches
