@@ -180,6 +180,7 @@ pub struct Shared {
   pub launching:  HashSet<String>,
   pub busy:       HashMap<String, Busy>,
   pub toasts:     Notifications,
+  pub logos:      HashMap<String, browse::Logo>,
   pub loaded:     bool,
 }
 
@@ -199,6 +200,7 @@ impl Shared {
       launching: HashSet::new(),
       busy: HashMap::new(),
       toasts: Notifications::default(),
+      logos: HashMap::new(),
       loaded: false,
     }
   }

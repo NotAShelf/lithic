@@ -1,5 +1,7 @@
 //! Small building blocks shared by the screens.
 
+use std::borrow::Borrow;
+
 use iced::{
   Center,
   Element,
@@ -7,22 +9,29 @@ use iced::{
   Font,
   font,
   widget::{
+    PickList,
+    TextInput,
     button,
     center,
     column,
     container,
     mouse_area,
     opaque,
+    pick_list,
     row,
+    rule,
     space,
     stack,
     text,
+    text_input,
+    tooltip,
   },
 };
 
 use crate::{
   i18n::t,
-  style::{self, Tone},
+  icon::{self, Icon},
+  style::{self, Kind, Tone},
 };
 
 pub const fn bold() -> Font {
@@ -79,28 +88,54 @@ pub fn loading<'a, M: 'a>(
   center(text(label).style(style::muted)).padding(32).into()
 }
 
-/// A labelled form control with an optional hint below it.
+/// A text input in the shared control style.
+pub fn input<'a, M: Clone + 'a>(
+  placeholder: &str,
+  value: &str,
+) -> TextInput<'a, M> {
+  text_input(placeholder, value)
+    .padding([7, 10])
+    .style(style::input)
+}
+
+/// A drop-down in the shared control style.
+pub fn select<'a, T, L, V, M>(
+  options: L,
+  selected: Option<V>,
+  on_selected: impl Fn(T) -> M + 'a,
+) -> PickList<'a, T, L, V, M>
+where
+  T: ToString + PartialEq + Clone + 'a,
+  L: Borrow<[T]> + 'a,
+  V: Borrow<T> + 'a,
+  M: Clone + 'a,
+{
+  pick_list(options, selected, on_selected)
+    .padding([7, 10])
+    .style(style::select)
+}
+
+/// A labelled form control. `hint_text` shows on hover over a help icon.
 pub fn field<'a, M: 'a>(
   label: impl text::IntoFragment<'a>,
   control: impl Into<Element<'a, M>>,
-  hint: Option<String>,
+  hint_text: Option<String>,
 ) -> Element<'a, M> {
-  let mut col =
-    column![text(label).size(13).font(bold()), control.into()].spacing(6);
-  if let Some(hint) = hint {
-    col = col.push(text(hint).size(12).style(style::muted));
+  let mut heading = row![text(label).size(13).font(bold())]
+    .spacing(6)
+    .align_y(Center);
+  if let Some(h) = hint_text {
+    heading = heading.push(hint(h));
   }
-  col.into()
+  column![heading, control.into()].spacing(6).into()
 }
 
+/// A short status next to a name, as colored text.
 pub fn badge<'a, M: 'a>(
   label: impl text::IntoFragment<'a>,
   tone: Tone,
 ) -> Element<'a, M> {
-  container(text(label).size(11))
-    .padding([2, 8])
-    .style(style::badge(tone))
-    .into()
+  text(label).size(12).style(style::tone(tone)).into()
 }
 
 pub fn notice<'a, M: 'a>(
@@ -165,36 +200,57 @@ pub fn dialog<'a, M: 'a>(
 pub fn confirm<'a, M: Clone + 'a>(
   title: impl text::IntoFragment<'a>,
   body: impl text::IntoFragment<'a>,
-  confirm_label: impl text::IntoFragment<'a>,
+  confirm_label: String,
   danger: bool,
   on_confirm: M,
   on_cancel: M,
 ) -> Element<'a, M> {
-  let confirm = button(text(confirm_label))
-    .padding([8, 16])
-    .style(if danger {
-      button::danger
-    } else {
-      button::primary
-    })
-    .on_press(on_confirm);
   dialog(
     title,
     text(body),
     row![
-      button(text(t("common-cancel")))
-        .padding([8, 16])
-        .style(button::secondary)
-        .on_press(on_cancel),
-      confirm,
+      btn(None, t("common-cancel"), Kind::Ghost, Some(on_cancel)),
+      btn(
+        None,
+        confirm_label,
+        if danger { Kind::Danger } else { Kind::Primary },
+        Some(on_confirm)
+      ),
     ]
     .spacing(8),
     440.0,
   )
 }
 
-/// A primary action button that shows `busy_label` and does nothing while
-/// `busy` is set.
+/// The button every screen uses. All kinds share one size and shape so they
+/// line up next to each other.
+pub fn btn<'a, M: Clone + 'a>(
+  glyph: Option<Icon>,
+  label: String,
+  kind: Kind,
+  on_press: Option<M>,
+) -> Element<'a, M> {
+  let enabled = on_press.is_some();
+  let mut content = row![].spacing(8).align_y(Center);
+  if let Some(glyph) = glyph {
+    content = content.push(icon::colored(glyph, 16.0, move |theme| {
+      let color = kind.text(theme);
+      if enabled {
+        color
+      } else {
+        color.scale_alpha(0.45)
+      }
+    }));
+  }
+  button(content.push(text(label).size(14)))
+    .padding([7, 12])
+    .style(style::btn(kind))
+    .on_press_maybe(on_press)
+    .into()
+}
+
+/// A primary action that shows `busy_label` and does nothing while `busy`
+/// is set.
 pub fn action<'a, M: Clone + 'a>(
   label: String,
   busy_label: String,
@@ -202,22 +258,129 @@ pub fn action<'a, M: Clone + 'a>(
   on_press: Option<M>,
 ) -> Element<'a, M> {
   let label = if busy { busy_label } else { label };
-  button(text(label))
-    .padding([8, 16])
-    .style(button::primary)
-    .on_press_maybe(if busy { None } else { on_press })
-    .into()
+  btn(
+    None,
+    label,
+    Kind::Primary,
+    if busy { None } else { on_press },
+  )
 }
 
 pub fn secondary<'a, M: Clone + 'a>(
   label: String,
   on_press: Option<M>,
 ) -> Element<'a, M> {
-  button(text(label))
-    .padding([8, 16])
-    .style(button::secondary)
-    .on_press_maybe(on_press)
+  btn(None, label, Kind::Secondary, on_press)
+}
+
+pub fn primary_icon<'a, M: Clone + 'a>(
+  glyph: Icon,
+  label: String,
+  on_press: Option<M>,
+) -> Element<'a, M> {
+  btn(Some(glyph), label, Kind::Primary, on_press)
+}
+
+pub fn secondary_icon<'a, M: Clone + 'a>(
+  glyph: Icon,
+  label: String,
+  on_press: Option<M>,
+) -> Element<'a, M> {
+  btn(Some(glyph), label, Kind::Secondary, on_press)
+}
+
+/// A quiet way out, such as Cancel or Back.
+pub fn ghost<'a, M: Clone + 'a>(
+  label: String,
+  on_press: Option<M>,
+) -> Element<'a, M> {
+  btn(None, label, Kind::Ghost, on_press)
+}
+
+/// Shows `label` in a tooltip while the pointer is over `content`.
+pub fn tip<'a, M: 'a>(
+  content: impl Into<Element<'a, M>>,
+  label: impl text::IntoFragment<'a>,
+) -> Element<'a, M> {
+  tooltip(
+    content,
+    container(text(label).size(13))
+      .max_width(320)
+      .padding([6, 10])
+      .style(style::tooltip),
+    tooltip::Position::Top,
+  )
+  .gap(4)
+  .into()
+}
+
+/// An icon-only action. `label` names it in a tooltip.
+pub fn icon_button<'a, M: Clone + 'a>(
+  icon: Icon,
+  label: String,
+  on_press: Option<M>,
+) -> Element<'a, M> {
+  let enabled = on_press.is_some();
+  tip(
+    button(icon::colored(icon, 16.0, move |theme| {
+      let color = Kind::Ghost.text(theme);
+      if enabled {
+        color
+      } else {
+        color.scale_alpha(0.35)
+      }
+    }))
+    .padding(8)
+    .style(style::btn(Kind::Ghost))
+    .on_press_maybe(on_press),
+    label,
+  )
+}
+
+/// A help icon that explains something in a tooltip.
+pub fn hint<'a, M: 'a>(label: String) -> Element<'a, M> {
+  tip(
+    icon::colored(Icon::Help, 15.0, |theme| {
+      theme
+        .extended_palette()
+        .background
+        .base
+        .text
+        .scale_alpha(0.55)
+    }),
+    label,
+  )
+}
+
+/// A setting with its label on the left and its control on the right.
+pub fn setting_row<'a, M: 'a>(
+  label: impl text::IntoFragment<'a>,
+  hint_text: Option<String>,
+  control: impl Into<Element<'a, M>>,
+) -> Element<'a, M> {
+  let mut name = row![text(label).size(14)].spacing(6).align_y(Center);
+  if let Some(h) = hint_text {
+    name = name.push(hint(h));
+  }
+  row![container(name).width(Fill), control.into()]
+    .spacing(16)
+    .align_y(Center)
+    .padding([10, 0])
     .into()
+}
+
+/// Stacks `items` with thin lines between them.
+pub fn divided<'a, M: 'a>(
+  items: impl IntoIterator<Item = Element<'a, M>>,
+) -> Element<'a, M> {
+  let mut col = column![];
+  for (i, item) in items.into_iter().enumerate() {
+    if i > 0 {
+      col = col.push(rule::horizontal(1).style(style::divider));
+    }
+    col = col.push(item);
+  }
+  col.into()
 }
 
 pub fn link<'a, M: Clone + 'a>(label: String, on_press: M) -> Element<'a, M> {

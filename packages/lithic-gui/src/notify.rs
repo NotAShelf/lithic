@@ -8,14 +8,16 @@ use iced::{
   Element,
   Fill,
   Task,
-  widget::{button, column, container, row, text},
+  widget::{column, container, row, text},
 };
 use tokio::time::sleep;
 
 use crate::{
   app::Message as AppMessage,
   i18n::t,
+  icon::Icon,
   style::{self, Tone},
+  widget,
 };
 
 const EXPIRE_AFTER: Duration = Duration::from_secs(5);
@@ -128,7 +130,7 @@ impl Notifications {
   pub fn update(&mut self, message: Message) {
     match message {
       Message::Dismiss(id) | Message::Expire(id) => {
-        self.items.retain(|n| n.id != id)
+        self.items.retain(|n| n.id != id);
       },
       Message::Toggle(id) => {
         if let Some(n) = self.items.iter_mut().find(|n| n.id == id) {
@@ -151,17 +153,17 @@ impl Notifications {
         } else {
           t("toast-show-details")
         };
-        actions = actions.push(
-          button(text(label).size(12))
-            .style(button::text)
-            .on_press(Message::Toggle(n.id)),
-        );
+        actions = actions.push(widget::icon_button(
+          Icon::Info,
+          label,
+          Some(Message::Toggle(n.id)),
+        ));
       }
-      actions = actions.push(
-        button(text(t("toast-dismiss")).size(12))
-          .style(button::text)
-          .on_press(Message::Dismiss(n.id)),
-      );
+      actions = actions.push(widget::icon_button(
+        Icon::Close,
+        t("toast-dismiss"),
+        Some(Message::Dismiss(n.id)),
+      ));
 
       let mut body =
         column![row![text(&n.title).size(14).width(Fill), actions].spacing(8)]
