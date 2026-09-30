@@ -22,11 +22,11 @@ use lithic_core::{
   game::{Install, Platform, find_executable},
   version,
 };
+use lithic_icons::Icon;
 
 use crate::{
   app::{Message as AppMessage, OpKind, Outcome, Shared},
   i18n::{t, t1},
-  icon::Icon,
   style::{self, Tone},
   task::{blocking, pick_folder},
   widget,

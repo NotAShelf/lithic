@@ -66,3 +66,6 @@ the MIT License. Original copyright and MIT license text are preserved in
 are distributed under the Mozilla Public License (MPL) version 2.0. See
 [LICENSE](../LICENSE) for more details on the exact conditions. An online copy
 is [provided here](https://www.mozilla.org/en-US/MPL/2.0/).
+
+The GUI icons are from Lucide, licensed under ISC. Their license is in
+[`crates/lithic-icons/assets/icons/LICENSE`](../crates/lithic-icons/assets/icons/LICENSE).

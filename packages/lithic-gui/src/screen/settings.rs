@@ -23,12 +23,12 @@ use iced::{
   },
 };
 use lithic_core::{Settings, settings::GuiSettings};
+use lithic_icons::{self as icon, Icon};
 use native_theme_iced::{Theme as NativeTheme, from_preset};
 
 use crate::{
   app::{Message as AppMessage, Page, Shared},
   i18n::t,
-  icon::{self, Icon},
   style,
   task::{blocking, pick_folder},
   theme,

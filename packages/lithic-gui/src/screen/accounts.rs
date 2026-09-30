@@ -11,11 +11,11 @@ use lithic_core::{
   Error,
   auth::{Account, AuthError},
 };
+use lithic_icons::Icon;
 
 use crate::{
   app::{Message as AppMessage, Shared},
   i18n::{t, t1},
-  icon::Icon,
   style::{self, Tone},
   task::blocking,
   widget,

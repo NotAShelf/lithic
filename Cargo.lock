@@ -3109,6 +3109,7 @@ dependencies = [
  "iced",
  "jiff",
  "lithic-core",
+ "lithic-icons",
  "lithic-locale",
  "native-theme-iced",
  "opener",
@@ -3118,6 +3119,13 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "lithic-icons"
+version = "2.0.0"
+dependencies = [
+ "iced",
 ]
 
 [[package]]
