@@ -27,6 +27,7 @@ use lithic_core::{
   Lithic,
   Result as CoreResult,
   fsutil::slugify,
+  game::{launchable, needs_download},
   launch::read_tail,
   mods::{self, InstallOptions, InstalledMod, ModRef, Problem, Update},
   pack::ExportOptions,
@@ -907,7 +908,10 @@ impl State {
 
     let game = match &instance.game_version {
       Some(v) if game_ok => t1("instances-game", "version", v.clone()),
-      Some(v) => t1("instance-game-not-installed", "version", v.clone()),
+      Some(v) if needs_download(&shared.installs, v) => {
+        t1("instance-game-not-installed", "version", v.clone())
+      },
+      Some(v) => t1("instance-game-files-missing", "version", v.clone()),
       None => t("instances-no-game"),
     };
     let played = instance.stats.last_played_at.map_or_else(
@@ -934,7 +938,7 @@ impl State {
         t("instances-play"),
         t("instances-starting"),
         launching,
-        game_ok.then_some(Message::Launch),
+        instance.game_version.as_deref().is_some_and(|v| launchable(&shared.installs, v)).then_some(Message::Launch),
       )
     };
 

@@ -9,6 +9,7 @@ use iced::{
 };
 use lithic_core::{
   Instance,
+  game::{launchable, needs_download},
   instance::NewInstance,
   mods::InstallOptions,
   paths::stock_game_data_dirs,
@@ -18,7 +19,8 @@ use super::{format_duration, format_time};
 use crate::{
   app::{Message as AppMessage, OpKind, Outcome, Page, Shared, Summary},
   i18n::{t, t1, t2},
-  style::{self, Tone},
+  icon::Icon,
+  style::{self, Kind, Tone},
   task::{blocking, pick_folder, pick_pack},
   widget,
 };
@@ -375,22 +377,45 @@ fn instance_row<'a>(
       .iter()
       .any(|i| i.version == v && i.is_available())
   });
-  if missing_game {
-    title = title.push(widget::badge(t("instances-game-missing"), Tone::Bad));
+  if let Some(v) = instance.game_version.as_deref()
+    && missing_game
+    && busy.is_none()
+  {
+    let released = shared
+      .manifest
+      .as_ref()
+      .is_none_or(|m| m.release(v).is_some());
+    title = title.push(match (needs_download(&shared.installs, v), released) {
+      (false, _) => widget::badge(t("games-missing"), Tone::Bad),
+      (true, true) => widget::badge(t("instances-game-missing"), Tone::Warn),
+      (true, false) => {
+        widget::badge(t("instances-game-unavailable"), Tone::Bad)
+      },
+    });
   }
 
-  let play: Element<Message> = if running {
-    button(text(t("instances-stop")))
-      .padding([8, 18])
-      .style(button::danger)
-      .on_press(Message::Stop(id.clone()))
-      .into()
-  } else {
-    widget::action(
-      t("instances-play"),
+  let play = if running {
+    widget::btn(
+      Some(Icon::Stop),
+      t("instances-stop"),
+      Kind::Danger,
+      Some(Message::Stop(id.clone())),
+    )
+  } else if launching || busy.is_some() {
+    widget::btn(
+      Some(Icon::Play),
       t("instances-starting"),
-      launching,
-      (!missing_game && instance.game_version.is_some())
+      Kind::Secondary,
+      None,
+    )
+  } else {
+    widget::secondary_icon(
+      Icon::Play,
+      t("instances-play"),
+      instance
+        .game_version
+        .as_deref()
+        .is_some_and(|v| launchable(&shared.installs, v))
         .then(|| Message::Launch(id.clone())),
     )
   };

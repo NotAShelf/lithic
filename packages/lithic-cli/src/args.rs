@@ -392,14 +392,18 @@ pub enum PlatformArg {
 #[derive(Debug, Args)]
 pub struct LaunchArgs {
   /// Instance to start; defaults to the selected one
-  pub id:      Option<String>,
+  pub id:         Option<String>,
   /// Return right away instead of waiting for the game to exit (play time
   /// is not recorded)
   #[arg(long)]
-  pub detach:  bool,
+  pub detach:     bool,
   /// Print the command instead of running it
   #[arg(long)]
-  pub dry_run: bool,
+  pub dry_run:    bool,
+  /// Fail instead of downloading the instance's game version when it is not
+  /// installed
+  #[arg(long)]
+  pub no_install: bool,
 }
 
 #[derive(Debug, Args)]

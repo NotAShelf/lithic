@@ -44,7 +44,7 @@ use lithic_core::{
   Settings,
   Step,
   auth::Accounts,
-  game::{Install, Manifest},
+  game::{Install, Manifest, needs_download},
   launch::{Exit, Session},
   mods::{Change, InstallOptions, ModRef, Report},
 };
@@ -132,6 +132,8 @@ pub enum OpKind {
   Import,
   Export,
   GameInstall,
+  /// Installing the game version an instance needs before starting it.
+  GameForLaunch,
 }
 
 /// A cloneable digest of a core [`Report`].
@@ -161,6 +163,7 @@ pub enum Outcome {
   Mods(Summary),
   Imported { instance: String, summary: Summary },
   GameInstalled(String),
+  GameReady { instance: String, install: Install },
   Exported(PathBuf),
 }
 
@@ -737,8 +740,40 @@ impl App {
   }
 
   fn launch(&mut self, id: String) -> Task<Message> {
-    if self.shared.is_running(&id) {
+    if self.shared.is_running(&id) || self.shared.busy.contains_key(&id) {
       return Task::none();
+    }
+    let missing = self
+      .shared
+      .instance(&id)
+      .and_then(|i| i.game_version.clone())
+      .filter(|v| needs_download(&self.shared.installs, v));
+    if let Some(version) = missing {
+      if self.shared.busy.contains_key(&game::busy_key(&version)) {
+        return self.shared.toasts.warning(t1(
+          "launch-game-downloading",
+          "version",
+          version,
+        ));
+      }
+      return self.shared.start_op(
+        id.clone(),
+        OpKind::GameForLaunch,
+        move |lithic, reporter, cancel| {
+          async move {
+            lithic
+              .ensure_game(&version, &reporter, &cancel)
+              .await
+              .map(|install| {
+                Outcome::GameReady {
+                  instance: id,
+                  install,
+                }
+              })
+              .map_err(|e| e.to_string())
+          }
+        },
+      );
     }
     self.shared.launching.insert(id.clone());
     let lithic = self.shared.lithic.clone();
@@ -788,6 +823,17 @@ impl App {
           "version",
           version,
         )));
+      },
+      Ok(Outcome::GameReady { instance, install }) => {
+        tasks.push(self.shared.toasts.success(t1(
+          "game-installed",
+          "version",
+          install.version.clone(),
+        )));
+        // Registered now, so the launch does not see the stale list and
+        // start another download before the reload lands.
+        self.shared.installs.push(install);
+        tasks.push(Task::done(Message::Launch(instance)));
       },
       Ok(Outcome::Exported(path)) => {
         tasks.push(self.shared.toasts.success(t1(
@@ -1134,4 +1180,43 @@ pub fn run(lithic: Lithic, link: Option<ModRef>) -> iced::Result {
   .exit_on_close_request(false)
   .window_size((1180.0, 760.0))
   .run()
+}
+
+#[cfg(test)]
+#[expect(
+  clippy::unwrap_used,
+  reason = "test setup and assertions intentionally fail on error"
+)]
+mod tests {
+  use lithic_core::{Paths, instance::NewInstance};
+
+  use super::*;
+
+  #[test]
+  fn launching_without_the_game_downloads_it_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let lithic = Lithic::new(Paths::rooted(dir.path())).unwrap();
+    let instance = lithic
+      .create_instance(NewInstance {
+        name: "Main".into(),
+        game_version: Some("1.21.5".into()),
+        ..NewInstance::default()
+      })
+      .unwrap();
+    let (mut app, _) = App::new(lithic, None);
+    app.shared.instances = vec![instance.clone()];
+
+    let _ = app.update(Message::Launch(instance.id.clone()));
+    assert_eq!(
+      app.shared.busy.get(&instance.id).map(|b| b.kind),
+      Some(OpKind::GameForLaunch)
+    );
+    assert!(!app.shared.launching.contains(&instance.id));
+
+    let _ = app.update(Message::Launch(instance.id.clone()));
+    assert!(
+      !app.shared.launching.contains(&instance.id),
+      "a second press waits for the download"
+    );
+  }
 }
