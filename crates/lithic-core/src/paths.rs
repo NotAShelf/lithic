@@ -117,6 +117,12 @@ impl Paths {
     self.cache.join("mod-index.json")
   }
 
+  /// The cached list of mods with a release for one major.minor game version.
+  #[must_use]
+  pub fn mod_index_file_for(&self, (major, minor): (u64, u64)) -> PathBuf {
+    self.cache.join(format!("mod-index-{major}.{minor}.json"))
+  }
+
   #[must_use]
   pub fn game_manifest_file(&self) -> PathBuf {
     self.cache.join("game-manifest.json")

@@ -107,7 +107,26 @@ impl Lithic {
   /// Returns an error if settings cannot be read, or if the request fails
   /// without a usable cache.
   pub async fn mod_index(&self, freshness: Freshness) -> Result<ModIndex> {
-    let path = self.paths.mod_index_file();
+    self.mod_index_for(None, freshness).await
+  }
+
+  /// Like [`Self::mod_index`], but with `minor` set only lists mods that have
+  /// a release for that major.minor game version. Each version is cached
+  /// separately, with the same maximum age.
+  ///
+  /// # Errors
+  ///
+  /// Returns an error if settings cannot be read, or if the request fails
+  /// without a usable cache.
+  pub async fn mod_index_for(
+    &self,
+    minor: Option<(u64, u64)>,
+    freshness: Freshness,
+  ) -> Result<ModIndex> {
+    let path = minor.map_or_else(
+      || self.paths.mod_index_file(),
+      |m| self.paths.mod_index_file_for(m),
+    );
     let max_age = f64::from(self.settings()?.mods.index_max_age_hours);
     let cached = match ModIndex::load_cached(&path) {
       Some(index)
@@ -117,7 +136,29 @@ impl Lithic {
       },
       cached => cached,
     };
-    match self.moddb.mods(&moddb::Query::default()).await {
+    let fetched = match minor {
+      None => self.moddb.mods(&moddb::Query::default()).await,
+      Some(minor) => {
+        match self.moddb.game_versions().await {
+          Ok(tags) => {
+            let game_versions = tags
+              .iter()
+              .filter(|tag| version::minor(&tag.name) == Some(minor))
+              .map(|tag| tag.tag_id)
+              .collect();
+            self
+              .moddb
+              .mods(&moddb::Query {
+                game_versions,
+                ..moddb::Query::default()
+              })
+              .await
+          },
+          Err(e) => Err(e),
+        }
+      },
+    };
+    match fetched {
       Ok(mods) => {
         let index = ModIndex {
           fetched_at: fsutil::now_ms(),
@@ -138,5 +179,52 @@ impl Lithic {
         }
       },
     }
+  }
+}
+
+#[cfg(test)]
+#[expect(
+  clippy::unwrap_used,
+  reason = "test setup and assertions intentionally fail on error"
+)]
+mod tests {
+  use super::*;
+
+  #[tokio::test]
+  async fn version_lists_are_cached_per_version() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut lithic = Lithic::new(Paths::rooted(dir.path())).unwrap();
+    // Nothing listens here, so any request fails.
+    lithic.moddb = ModDb::with_base(lithic.http.clone(), "http://127.0.0.1:9");
+    let index = |name: &str, fetched_at| {
+      ModIndex {
+        fetched_at,
+        mods: vec![moddb::ModSummary {
+          name: name.into(),
+          ..moddb::ModSummary::default()
+        }],
+      }
+    };
+    index("fresh", fsutil::now_ms())
+      .save(&lithic.paths.mod_index_file_for((1, 21)))
+      .unwrap();
+    let got = lithic
+      .mod_index_for(Some((1, 21)), Freshness::Cached)
+      .await
+      .unwrap();
+    assert_eq!(got.mods[0].name, "fresh");
+
+    index("stale", 0)
+      .save(&lithic.paths.mod_index_file_for((1, 20)))
+      .unwrap();
+    let got = lithic
+      .mod_index_for(Some((1, 20)), Freshness::Cached)
+      .await
+      .unwrap();
+    assert_eq!(got.mods[0].name, "stale", "a failed refresh falls back");
+    assert!(
+      lithic.mod_index_for(None, Freshness::Cached).await.is_err(),
+      "each version has its own cache"
+    );
   }
 }
