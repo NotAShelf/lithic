@@ -11,7 +11,7 @@ pub mod client;
 pub mod clientsettings;
 pub mod store;
 
-pub use client::{AuthError, LoginResponse};
+pub use client::{AuthError, LoginResponse, SessionStatus};
 use clientsettings::AccountIdentity;
 use serde::{Deserialize, Serialize};
 pub use store::Session;
@@ -26,10 +26,24 @@ use crate::{
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Account {
-  pub uid:        String,
-  pub playername: String,
+  pub uid:             String,
+  pub playername:      String,
   #[serde(default)]
-  pub email:      String,
+  pub email:           String,
+  /// Whether the account rents an official game server, as last reported
+  /// by the auth server.
+  #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+  pub has_game_server: bool,
+}
+
+/// An account's session as the auth server last described it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct AccountStatus {
+  pub valid:           bool,
+  /// What the account may play, as the server spells it. The format is not
+  /// documented; the game stores it as-is.
+  pub entitlements:    String,
+  pub has_game_server: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -147,9 +161,10 @@ impl Lithic {
     }
     Ok((
       Account {
-        uid:        login.uid,
-        playername: login.playername,
-        email:      email.trim().to_string(),
+        uid:             login.uid,
+        playername:      login.playername,
+        email:           email.trim().to_string(),
+        has_game_server: login.has_game_server,
       },
       Session {
         sessionkey:       login.sessionkey,
@@ -296,13 +311,88 @@ impl Lithic {
   /// # Errors
   /// Returns an error if the auth server cannot verify the session.
   pub async fn check_account_session(&self, uid: &str) -> Result<bool> {
+    Ok(self.account_status(uid).await?.valid)
+  }
+
+  /// Checks an account's session like [`Self::check_account_session`], and
+  /// keeps the entitlements and game server flag the server reports with it.
+  /// A missing or incomplete session is rejected without a network request,
+  /// showing what was saved at login.
+  ///
+  /// # Errors
+  /// Returns an error if the auth server cannot verify the session, or what
+  /// it reported cannot be saved.
+  pub async fn account_status(&self, uid: &str) -> Result<AccountStatus> {
+    let has_game_server =
+      self.accounts()?.get(uid).is_some_and(|a| a.has_game_server);
     let Some(session) = self.session(uid)? else {
-      return Ok(false);
+      return Ok(AccountStatus {
+        has_game_server,
+        ..AccountStatus::default()
+      });
     };
     if session.sessionkey.is_empty() || session.sessionsignature.is_empty() {
-      return Ok(false);
+      return Ok(AccountStatus {
+        valid: false,
+        entitlements: session.entitlements,
+        has_game_server,
+      });
     }
-    Ok(client::validate_session(&self.http, uid, &session.sessionkey).await?)
+    let status =
+      client::validate_session(&self.http, uid, &session.sessionkey).await?;
+    if status.valid {
+      self.remember_status(uid, &status)?;
+    }
+    Ok(AccountStatus {
+      valid:           status.valid,
+      entitlements:    status.entitlements.unwrap_or(session.entitlements),
+      has_game_server: status.has_game_server.unwrap_or(has_game_server),
+    })
+  }
+
+  fn remember_status(&self, uid: &str, status: &SessionStatus) -> Result<()> {
+    if let Some(entitlements) = &status.entitlements {
+      let mut temporary = self.temporary()?;
+      if let Some((_, session)) =
+        temporary.accounts.iter_mut().find(|(a, _)| a.uid == uid)
+      {
+        session.entitlements.clone_from(entitlements);
+      } else {
+        drop(temporary);
+        let store = self.sessions();
+        if let Some(mut session) = store.load(uid)
+          && session.entitlements != *entitlements
+        {
+          session.entitlements.clone_from(entitlements);
+          store.save(uid, &session)?;
+        }
+      }
+    }
+    let Some(has_game_server) = status.has_game_server else {
+      return Ok(());
+    };
+    let mut temporary = self.temporary()?;
+    if let Some((account, _)) =
+      temporary.accounts.iter_mut().find(|(a, _)| a.uid == uid)
+    {
+      account.has_game_server = has_game_server;
+      return Ok(());
+    }
+    drop(temporary);
+    let saved: Accounts =
+      fsutil::read_toml(&self.paths.accounts_file())?.unwrap_or_default();
+    if saved
+      .get(uid)
+      .is_some_and(|a| a.has_game_server != has_game_server)
+    {
+      fsutil::update_toml(&self.paths.accounts_file(), |a: &mut Accounts| {
+        if let Some(account) = a.accounts.iter_mut().find(|x| x.uid == uid) {
+          account.has_game_server = has_game_server;
+        }
+        Ok(())
+      })?;
+    }
+    Ok(())
   }
 
   /// Stops a launch whose account session the auth server has rejected.
@@ -463,14 +553,14 @@ mod tests {
       active:   Some("a".into()),
       accounts: vec![
         Account {
-          uid:        "a".into(),
+          uid: "a".into(),
           playername: "A".into(),
-          email:      String::new(),
+          ..Account::default()
         },
         Account {
-          uid:        "b".into(),
+          uid: "b".into(),
           playername: "B".into(),
-          email:      String::new(),
+          ..Account::default()
         },
       ],
     }
@@ -509,6 +599,37 @@ mod tests {
     let a = l.accounts().unwrap();
     assert_eq!(a.active, None);
     assert_eq!(a.accounts.len(), 1);
+  }
+
+  #[test]
+  fn reported_account_data_is_kept() {
+    let d = tempfile::tempdir().unwrap();
+    let l = Lithic::new(crate::Paths::rooted(d.path())).unwrap();
+    l.save_login("x@y", LoginResponse {
+      uid: "one".into(),
+      sessionkey: "k".into(),
+      entitlements: "old".into(),
+      ..LoginResponse::default()
+    })
+    .unwrap();
+    l.remember_status("one", &SessionStatus {
+      valid:           true,
+      entitlements:    Some("new".into()),
+      has_game_server: Some(true),
+    })
+    .unwrap();
+    assert!(l.accounts().unwrap().get("one").unwrap().has_game_server);
+    assert_eq!(l.session("one").unwrap().unwrap().entitlements, "new");
+
+    l.remember_status("one", &SessionStatus {
+      valid: true,
+      ..SessionStatus::default()
+    })
+    .unwrap();
+    assert!(
+      l.accounts().unwrap().get("one").unwrap().has_game_server,
+      "an answer without the flag keeps the last one"
+    );
   }
 
   #[test]

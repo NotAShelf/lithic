@@ -330,9 +330,10 @@ impl Lithic {
       .into_iter()
       .filter_map(|a| {
         Some(Account {
-          uid:        get_str(a, "uid")?,
-          playername: get_str(a, "playername").unwrap_or_default(),
-          email:      get_str(a, "email").unwrap_or_default(),
+          uid:             get_str(a, "uid")?,
+          playername:      get_str(a, "playername").unwrap_or_default(),
+          email:           get_str(a, "email").unwrap_or_default(),
+          has_game_server: false,
         })
       })
       .collect();

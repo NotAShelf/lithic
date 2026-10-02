@@ -56,6 +56,7 @@ pub struct LoginResponse {
   pub sessionsignature: String,
   pub mptoken:          String,
   pub entitlements:     String,
+  pub has_game_server:  bool,
 }
 
 /// Pass `twofa` as `Some((prelogintoken, code))` on the second step.
@@ -92,6 +93,16 @@ pub async fn gamelogin(
   interpret(obj)
 }
 
+/// What the auth server says about a saved session.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SessionStatus {
+  pub valid:           bool,
+  /// `None` when the answer left it out.
+  pub entitlements:    Option<String>,
+  /// Whether the account rents an official game server.
+  pub has_game_server: Option<bool>,
+}
+
 /// Checks whether the game's server still accepts a saved session.
 ///
 /// # Errors
@@ -101,7 +112,7 @@ pub(crate) async fn validate_session(
   http: &Http,
   uid: &str,
   sessionkey: &str,
-) -> Result<bool, AuthError> {
+) -> Result<SessionStatus, AuthError> {
   let (status, body) = http
     .post_form(VALIDATE_URL, &[("uid", uid), ("sessionkey", sessionkey)])
     .await
@@ -112,30 +123,43 @@ pub(crate) async fn validate_session(
   parse_validation(&body)
 }
 
-fn parse_validation(body: &str) -> Result<bool, AuthError> {
-  let response: Value = serde_json::from_str(body).map_err(|_| {
-    AuthError::Server("invalid session validation response".into())
-  })?;
-  match response.get("valid") {
-    Some(Value::Bool(valid)) => Ok(*valid),
-    Some(Value::Number(valid)) if valid.as_u64() == Some(1) => Ok(true),
-    Some(Value::Number(valid)) if valid.as_u64() == Some(0) => Ok(false),
-    Some(Value::String(valid))
-      if valid == "1" || valid.eq_ignore_ascii_case("true") =>
-    {
-      Ok(true)
+fn parse_validation(body: &str) -> Result<SessionStatus, AuthError> {
+  let invalid =
+    || AuthError::Server("invalid session validation response".into());
+  let response: Value = serde_json::from_str(body).map_err(|_| invalid())?;
+  let obj = response.as_object().ok_or_else(invalid)?;
+  let valid = obj.get("valid").and_then(flag).ok_or_else(invalid)?;
+  let entitlements = obj
+    .contains_key("entitlements")
+    .then(|| field(obj, "entitlements"));
+  Ok(SessionStatus {
+    valid,
+    entitlements,
+    has_game_server: game_server_flag(obj),
+  })
+}
+
+/// A boolean the auth server may send as `true`, `1` or `"1"`.
+fn flag(value: &Value) -> Option<bool> {
+  match value {
+    Value::Bool(b) => Some(*b),
+    Value::Number(n) if n.as_u64() == Some(1) => Some(true),
+    Value::Number(n) if n.as_u64() == Some(0) => Some(false),
+    Value::String(s) if s == "1" || s.eq_ignore_ascii_case("true") => {
+      Some(true)
     },
-    Some(Value::String(valid))
-      if valid == "0" || valid.eq_ignore_ascii_case("false") =>
-    {
-      Ok(false)
+    Value::String(s) if s == "0" || s.eq_ignore_ascii_case("false") => {
+      Some(false)
     },
-    _ => {
-      Err(AuthError::Server(
-        "invalid session validation response".into(),
-      ))
-    },
+    _ => None,
   }
+}
+
+/// `gamelogin` spells it `hasgameserver`, `clientvalidate` `hasGameServer`.
+fn game_server_flag(obj: &Map<String, Value>) -> Option<bool> {
+  ["hasgameserver", "hasGameServer"]
+    .iter()
+    .find_map(|k| obj.get(*k).and_then(flag))
 }
 
 fn field(obj: &Map<String, Value>, key: &str) -> String {
@@ -167,6 +191,7 @@ fn interpret(obj: &Map<String, Value>) -> Result<LoginResponse, AuthError> {
       ]),
       mptoken: first_field(obj, &["mptoken", "mpToken"]),
       entitlements: field(obj, "entitlements"),
+      has_game_server: game_server_flag(obj).unwrap_or(false),
     });
   }
 
@@ -230,9 +255,40 @@ mod tests {
 
   #[test]
   fn session_validation_requires_explicit_acceptance() {
-    assert!(!parse_validation(r#"{"valid":0,"reason":"nosession"}"#).unwrap());
-    assert!(parse_validation(r#"{"valid":1}"#).unwrap());
+    assert!(
+      !parse_validation(r#"{"valid":0,"reason":"nosession"}"#)
+        .unwrap()
+        .valid
+    );
+    assert_eq!(parse_validation(r#"{"valid":1}"#).unwrap(), SessionStatus {
+      valid: true,
+      ..SessionStatus::default()
+    });
     assert!(parse_validation(r#"{"reason":"nosession"}"#).is_err());
+  }
+
+  #[test]
+  fn session_validation_reports_account_data() {
+    let status = parse_validation(
+      r#"{"valid":"1","entitlements":"singleplayer","hasGameServer":"0"}"#,
+    )
+    .unwrap();
+    assert_eq!(status.entitlements.as_deref(), Some("singleplayer"));
+    assert_eq!(status.has_game_server, Some(false));
+    let status =
+      parse_validation(r#"{"valid":true,"entitlements":null}"#).unwrap();
+    assert_eq!(status.entitlements.as_deref(), Some(""));
+    assert_eq!(status.has_game_server, None);
+  }
+
+  #[test]
+  fn login_reads_the_game_server_flag() {
+    assert!(
+      parse(r#"{"sessionkey":"sk","hasgameserver":1}"#)
+        .unwrap()
+        .has_game_server
+    );
+    assert!(!parse(r#"{"sessionkey":"sk"}"#).unwrap().has_game_server);
   }
 
   #[test]
