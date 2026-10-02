@@ -27,7 +27,7 @@ use lithic_core::{
   Cancel,
   Freshness,
   http::Http,
-  moddb::{self, ModDetails, ModSummary, Query, Sort},
+  moddb::{self, ModDetails, ModSummary, Sort},
   mods::{
     InstallOptions,
     ModRef,
@@ -431,38 +431,18 @@ impl State {
         let force = self.pool_key == Some(key);
         self.pool = None;
         let lithic = shared.lithic.clone();
+        let freshness = if force {
+          Freshness::Refresh
+        } else {
+          Freshness::Cached
+        };
         return Task::perform(
           async move {
-            let result = match key {
-              None => {
-                let freshness = if force {
-                  Freshness::Refresh
-                } else {
-                  Freshness::Cached
-                };
-                lithic.mod_index(freshness).await.map(|index| index.mods)
-              },
-              Some(minor) => {
-                match lithic.moddb.game_versions().await {
-                  Ok(tags) => {
-                    let ids: Vec<i64> = tags
-                      .iter()
-                      .filter(|tag| version::minor(&tag.name) == Some(minor))
-                      .map(|tag| tag.tag_id)
-                      .collect();
-                    lithic
-                      .moddb
-                      .mods(&Query {
-                        game_versions: ids,
-                        ..Query::default()
-                      })
-                      .await
-                  },
-                  Err(e) => Err(e),
-                }
-              },
-            };
-            result.map_err(|e| e.to_string())
+            lithic
+              .mod_index_for(key, freshness)
+              .await
+              .map(|index| index.mods)
+              .map_err(|e| e.to_string())
           },
           move |r| wrap(Message::PoolLoaded(request, key, r)),
         );
