@@ -9,13 +9,14 @@ use iced::{
 };
 use lithic_core::{
   Error,
-  auth::{Account, AuthError},
+  auth::{Account, AccountStatus, AuthError},
 };
 use lithic_icons::Icon;
 
+use super::{format_duration, format_time};
 use crate::{
   app::{Message as AppMessage, Shared},
-  i18n::{t, t1},
+  i18n::{t, t1, t2},
   style::{self, Tone},
   task::blocking,
   widget,
@@ -29,10 +30,20 @@ enum Step {
 
 #[derive(Debug, Clone)]
 enum Check {
-  Checking,
-  Valid,
-  Rejected,
+  /// Keeps the last answer on screen while it is asked again.
+  Checking(Option<AccountStatus>),
+  Done(AccountStatus),
   Failed(String),
+}
+
+impl Check {
+  const fn status(&self) -> Option<&AccountStatus> {
+    match self {
+      Self::Checking(status) => status.as_ref(),
+      Self::Done(status) => Some(status),
+      Self::Failed(_) => None,
+    }
+  }
 }
 
 #[derive(Debug)]
@@ -81,7 +92,8 @@ pub enum Message {
   Submit,
   Back,
   Result(LoginResult),
-  Checked(String, Result<bool, String>),
+  Checked(String, Result<AccountStatus, String>),
+  Refresh(String),
   MakeActive(String),
   AskLogout(Account),
   CancelLogout,
@@ -104,7 +116,7 @@ impl State {
 
   /// Whether the last check found `uid`'s session rejected.
   pub fn rejected(&self, uid: &str) -> bool {
-    matches!(self.checks.get(uid), Some(Check::Rejected))
+    matches!(self.checks.get(uid), Some(Check::Done(s)) if !s.valid)
   }
 
   /// Checks the active account, so the sidebar can tell whether it still
@@ -117,17 +129,17 @@ impl State {
   }
 
   fn check(&mut self, uid: String, shared: &Shared) -> Task<AppMessage> {
-    if matches!(self.checks.get(&uid), Some(Check::Checking)) {
-      return Task::none();
-    }
-    self.checks.insert(uid.clone(), Check::Checking);
+    let last = match self.checks.get(&uid) {
+      Some(Check::Checking(_)) => return Task::none(),
+      Some(check) => check.status().cloned(),
+      None => None,
+    };
+    self.checks.insert(uid.clone(), Check::Checking(last));
     let lithic = shared.lithic.clone();
     Task::perform(
       async move {
-        let result = lithic
-          .check_account_session(&uid)
-          .await
-          .map_err(|e| e.to_string());
+        let result =
+          lithic.account_status(&uid).await.map_err(|e| e.to_string());
         (uid, result)
       },
       |(uid, result)| AppMessage::Accounts(Message::Checked(uid, result)),
@@ -198,7 +210,7 @@ impl State {
             let checks = mem::take(&mut self.checks);
             *self = Self::default();
             self.checks = checks;
-            self.checks.insert(account.uid.clone(), Check::Valid);
+            let uid = account.uid.clone();
             return Task::batch([
               shared.toasts.success(t1(
                 "accounts-logged-in",
@@ -206,6 +218,7 @@ impl State {
                 account.playername,
               )),
               Task::done(AppMessage::Reload),
+              self.check(uid, shared),
             ]);
           },
           LoginResult::NeedsCode(token) => {
@@ -216,17 +229,18 @@ impl State {
         }
       },
       Message::Checked(uid, result) => {
-        if matches!(self.checks.get(&uid), Some(Check::Checking))
-          && shared.accounts.get(&uid).is_some()
-        {
+        // Signing out drops the entry, so a late answer is not kept. The
+        // account list is not consulted: a new login's answer can arrive
+        // before the reload lists the account.
+        if matches!(self.checks.get(&uid), Some(Check::Checking(_))) {
           let status = match result {
-            Ok(true) => Check::Valid,
-            Ok(false) => Check::Rejected,
+            Ok(status) => Check::Done(status),
             Err(e) => Check::Failed(e),
           };
           self.checks.insert(uid, status);
         }
       },
+      Message::Refresh(uid) => return self.check(uid, shared),
       Message::MakeActive(uid) => {
         let lithic = shared.lithic.clone();
         return Task::perform(
@@ -271,10 +285,11 @@ impl State {
   ) -> Element<'a, Message> {
     let uid = &account.uid;
     let active = shared.accounts.active.as_deref() == Some(uid.as_str());
-    let (tone, status) = match self.checks.get(uid) {
-      Some(Check::Checking) => (Tone::Neutral, t("accounts-checking")),
-      Some(Check::Valid) => (Tone::Good, t("accounts-valid")),
-      Some(Check::Rejected) => (Tone::Bad, t("accounts-rejected")),
+    let check = self.checks.get(uid);
+    let (tone, status) = match check {
+      Some(Check::Checking(_)) => (Tone::Neutral, t("accounts-checking")),
+      Some(Check::Done(s)) if s.valid => (Tone::Good, t("accounts-valid")),
+      Some(Check::Done(_)) => (Tone::Bad, t("accounts-rejected")),
       Some(Check::Failed(e)) => {
         (Tone::Warn, t1("accounts-check-failed", "error", e.clone()))
       },
@@ -302,14 +317,38 @@ impl State {
         identity.push(widget::badge(t("accounts-active"), Tone::Accent));
     }
 
+    let reported = check.and_then(Check::status);
+    let mut details = vec![t1("accounts-uid", "uid", uid.clone())];
+    if let Some(entitlements) = reported
+      .map(|s| s.entitlements.trim())
+      .filter(|e| !e.is_empty())
+    {
+      details.push(t1(
+        "accounts-entitlements",
+        "list",
+        entitlements.to_string(),
+      ));
+    }
+    if reported.map_or(account.has_game_server, |s| s.has_game_server) {
+      details.push(t("accounts-game-server"));
+    }
+    details.push(Self::playtime(uid, shared));
+
     let mut actions = row![].spacing(4).align_y(Center);
     if needs_login {
       actions = actions.push(widget::icon_button(
-        Icon::Refresh,
+        Icon::User,
         t("accounts-sign-in-again"),
         Some(Message::Add(
           Some(account.email.clone()).filter(|e| !e.is_empty()),
         )),
+      ));
+    } else {
+      actions = actions.push(widget::icon_button(
+        Icon::Refresh,
+        t("accounts-refresh"),
+        (!matches!(check, Some(Check::Checking(_))))
+          .then(|| Message::Refresh(uid.clone())),
       ));
     }
     if !active {
@@ -326,12 +365,51 @@ impl State {
     ));
 
     container(
-      row![container(identity).width(Fill), actions]
-        .spacing(12)
-        .align_y(Center),
+      row![
+        column![
+          identity,
+          text(details.join("  |  ")).size(12).style(style::muted),
+        ]
+        .spacing(4)
+        .width(Fill),
+        actions
+      ]
+      .spacing(12)
+      .align_y(Center),
     )
     .padding([8, 12])
     .into()
+  }
+
+  /// Time played through Lithic on the instances that launch with `uid`.
+  fn playtime(uid: &str, shared: &Shared) -> String {
+    let (total, last) = shared
+      .instances
+      .iter()
+      .filter(|i| {
+        shared
+          .accounts
+          .for_instance(i.account.as_deref())
+          .is_some_and(|a| a.uid == uid)
+      })
+      .fold((0, None), |(total, last), i| {
+        (
+          total + i.stats.play_time_ms,
+          last.max(i.stats.last_played_at),
+        )
+      });
+    last.map_or_else(
+      || t("accounts-never-played"),
+      |ms| {
+        t2(
+          "accounts-played",
+          "total",
+          format_duration(total),
+          "when",
+          format_time(ms),
+        )
+      },
+    )
   }
 
   fn add_dialog(&self) -> Element<'_, Message> {
@@ -509,12 +587,37 @@ mod tests {
     shared.sessions.insert("a".into());
     let mut s = State::default();
     let _ = s.enter(&shared);
-    assert!(matches!(s.checks.get("a"), Some(Check::Checking)));
+    assert!(matches!(s.checks.get("a"), Some(Check::Checking(None))));
     assert!(!s.checks.contains_key("b"), "no session, nothing to check");
 
     assert!(!s.rejected("a"));
-    let _ = s.update(Message::Checked("a".into(), Ok(false)), &mut shared);
+    let _ = s.update(
+      Message::Checked("a".into(), Ok(AccountStatus::default())),
+      &mut shared,
+    );
     assert!(s.rejected("a"), "the sidebar must see the rejection");
+  }
+
+  #[test]
+  fn refreshing_keeps_the_last_answer() {
+    let (_dir, mut shared) = shared();
+    let mut s = State::default();
+    let status = AccountStatus {
+      valid:           true,
+      entitlements:    "singleplayer".into(),
+      has_game_server: true,
+    };
+    s.checks.insert("a".into(), Check::Done(status.clone()));
+    let _ = s.update(Message::Refresh("a".into()), &mut shared);
+    assert!(
+      matches!(s.checks.get("a"), Some(Check::Checking(Some(last))) if *last == status)
+    );
+    let _ = s.update(Message::Refresh("a".into()), &mut shared);
+    let _ = s.update(
+      Message::Checked("a".into(), Err("offline".into())),
+      &mut shared,
+    );
+    assert!(matches!(s.checks.get("a"), Some(Check::Failed(_))));
   }
 
   #[test]
