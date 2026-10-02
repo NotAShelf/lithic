@@ -436,6 +436,8 @@ pub enum AccountCommand {
   /// Known accounts
   #[command(visible_alias = "ls")]
   List,
+  /// Check an account's session and show what the auth server reports
+  Info { account: String },
   /// Use this account for instances that do not name one
   Switch { account: String },
   /// Forget an account and its session

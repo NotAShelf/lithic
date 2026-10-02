@@ -65,14 +65,14 @@ using it is started.
 
 **Accounts** signs you in. With an account, the game starts already logged in.
 Each instance can use its own account; otherwise it uses the active one. "Add
-account" opens the sign-in form. Lithic checks every saved session when you
-open the page. The dot next to a name turns green when the session works and red
-when you need to sign in again.
+account" opens the sign-in form. Lithic checks every saved session when you open
+the page. The dot next to a name turns green when the session works and red when
+you need to sign in again.
 
-Saved sessions go to the system keyring (Secret Service on Linux,
-Keychain on macOS, Credential Manager on Windows). If none is available,
-lithic stores them in a file only your user can read. Lithic keeps a
-game-renewed session after a normal launch closes.
+Saved sessions go to the system keyring (Secret Service on Linux, Keychain on
+macOS, Credential Manager on Windows). If none is available, lithic stores them
+in a file only your user can read. Lithic keeps a game-renewed session after a
+normal launch closes.
 
 ## Commands
 
@@ -141,6 +141,7 @@ Accounts and packs:
 ```sh
 # Account management
 $ lithic account login
+$ lithic account info "YourPlayerName"  # checks the session, shows entitlements
 $ lithic instance edit --account "YourPlayerName"
 $ lithic pack export -o survival.zip --config
 $ lithic pack import survival.zip --name "Friend's pack"

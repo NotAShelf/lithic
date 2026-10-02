@@ -50,6 +50,37 @@ pub async fn run(ctx: &Ctx, cmd: AccountCommand) -> Result {
       Ui::print_table(&table);
       Ok(())
     },
+    AccountCommand::Info { account } => {
+      let a = find(ctx, &account)?;
+      let status = ctx.lithic.account_status(&a.uid).await?;
+      if ctx.ui.json {
+        return Ui::print_json(&serde_json::json!({
+          "account": a,
+          "status": status,
+        }));
+      }
+      let mut table = ctx.ui.table();
+      let yes_no = |b: bool| if b { "yes" } else { "no" };
+      for (key, value) in [
+        ("Player", a.playername.as_str()),
+        ("Email", a.email.as_str()),
+        ("Id", a.uid.as_str()),
+        (
+          "Session",
+          if status.valid {
+            "valid"
+          } else {
+            "rejected, log in again"
+          },
+        ),
+        ("Entitlements", status.entitlements.as_str()),
+        ("Game server", yes_no(status.has_game_server)),
+      ] {
+        table.add_row(vec![Cell::new(key), Cell::new(value)]);
+      }
+      Ui::print_table(&table);
+      Ok(())
+    },
     AccountCommand::Switch { account } => {
       let a = find(ctx, &account)?;
       ctx.lithic.set_active_account(&a.uid)?;
