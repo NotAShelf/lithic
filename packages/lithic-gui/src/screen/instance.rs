@@ -894,27 +894,24 @@ impl State {
       .padding(24)
       .height(Fill);
 
-    if let Some(confirm) = &self.confirm {
-      return widget::modal(
-        content,
-        Self::confirm_view(confirm, instance),
-        Message::CloseConfirm,
-      );
-    }
-    match self
-      .browse
-      .details(shared)
-      .filter(|_| self.tab == Tab::Browse)
-    {
-      Some(details) => {
-        widget::modal(
-          content,
-          details.map(Message::Browse),
-          Message::Browse(browse::Message::CloseDetails),
-        )
+    let dialog = self.confirm.as_ref().map_or_else(
+      || {
+        self
+          .browse
+          .details(shared)
+          .filter(|_| self.tab == Tab::Browse)
+          .map(|details| {
+            (
+              details.map(Message::Browse),
+              Message::Browse(browse::Message::CloseDetails),
+            )
+          })
       },
-      None => content.into(),
-    }
+      |confirm| {
+        Some((Self::confirm_view(confirm, instance), Message::CloseConfirm))
+      },
+    );
+    widget::layered(content, dialog)
   }
 
   fn header<'a>(

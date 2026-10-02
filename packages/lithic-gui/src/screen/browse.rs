@@ -1,4 +1,7 @@
-use std::{collections::HashMap, fmt};
+use std::{
+  collections::{BTreeSet, HashMap},
+  fmt,
+};
 
 use iced::{
   Center,
@@ -9,6 +12,7 @@ use iced::{
   alignment::Horizontal,
   widget::{
     button,
+    checkbox,
     column,
     container,
     image,
@@ -128,6 +132,8 @@ pub struct State {
   shown:          usize,
   installed:      HashMap<String, String>,
   updates:        HashMap<String, Update>,
+  /// Mod ids picked to install in one go.
+  selected:       BTreeSet<String>,
   details:        Option<Details>,
 }
 
@@ -149,6 +155,7 @@ impl Default for State {
       shown:          PAGE,
       installed:      HashMap::new(),
       updates:        HashMap::new(),
+      selected:       BTreeSet::new(),
       details:        None,
     }
   }
@@ -172,6 +179,9 @@ pub enum Message {
   FavoriteSaved(Result<(), String>),
   Update(String),
   Install(String, Option<String>),
+  Select(String, bool),
+  ClearSelection,
+  InstallSelected,
   OpenDetails(usize),
   DetailsLoaded(i64, Result<Box<ModDetails>, String>),
   CloseDetails,
@@ -308,7 +318,47 @@ impl State {
             .any(|id| self.installed.contains_key(id))
       })
       .collect();
+  }
+
+  /// Reranks for a new search or filter, starting again from the first page.
+  /// Refreshes that keep the search, such as after an install, call
+  /// [`Self::rerank`] instead so the list does not shrink under the user.
+  fn refilter(&mut self, shared: &mut Shared) -> Task<AppMessage> {
+    self.rerank(shared);
     self.shown = PAGE;
+    self.load_logos(shared)
+  }
+
+  fn install(
+    &self,
+    shared: &mut Shared,
+    refs: Vec<ModRef>,
+    pin: bool,
+  ) -> Task<AppMessage> {
+    let Some(target) = self.target_id(shared).map(ToString::to_string) else {
+      return shared.toasts.warning(t("browse-no-instance"));
+    };
+    shared.start_op(
+      target.clone(),
+      OpKind::Install,
+      move |lithic, reporter, cancel| {
+        async move {
+          let instance = lithic.instance(&target).map_err(|e| e.to_string())?;
+          let opts = InstallOptions {
+            dependencies: true,
+            pin_versions: pin,
+            reporter,
+            cancel,
+            ..InstallOptions::default()
+          };
+          lithic
+            .install_mods(&instance, &refs, &opts)
+            .await
+            .map(|r| Outcome::Mods(Summary::from(&r)))
+            .map_err(|e| e.to_string())
+        }
+      },
+    )
   }
 
   fn load_logos(&self, shared: &mut Shared) -> Task<AppMessage> {
@@ -356,13 +406,11 @@ impl State {
       },
       Message::Query(q) => {
         self.query = q;
-        self.rerank(shared);
-        return self.load_logos(shared);
+        return self.refilter(shared);
       },
       Message::Sort(s) => {
         self.sort = s;
-        self.rerank(shared);
-        return self.load_logos(shared);
+        return self.refilter(shared);
       },
       Message::Compatible(on) => {
         self.compatible = on;
@@ -370,13 +418,11 @@ impl State {
       },
       Message::FavoritesOnly(on) => {
         self.favorites_only = on;
-        self.rerank(shared);
-        return self.load_logos(shared);
+        return self.refilter(shared);
       },
       Message::HideInstalled(on) => {
         self.hide_installed = on;
-        self.rerank(shared);
-        return self.load_logos(shared);
+        return self.refilter(shared);
       },
       Message::Refresh => {
         self.request += 1;
@@ -427,8 +473,7 @@ impl State {
         }
         self.pool_key = Some(key);
         self.pool = Some(result);
-        self.rerank(shared);
-        return self.load_logos(shared);
+        return self.refilter(shared);
       },
       Message::Installed(target, result) => {
         if target.as_deref() != self.target_id(shared) {
@@ -440,6 +485,7 @@ impl State {
             self.updates.retain(|id, update| {
               self.installed.get(id) == Some(&update.installed)
             });
+            self.selected.retain(|id| !self.installed.contains_key(id));
             self.rerank(shared);
             return self.load_logos(shared);
           },
@@ -500,37 +546,36 @@ impl State {
         return shared.toasts.error(t("browse-favorite-failed"), Some(e));
       },
       Message::Install(mod_id, version) => {
-        let Some(target) = self.target_id(shared).map(ToString::to_string)
-        else {
-          return shared.toasts.warning(t("browse-no-instance"));
-        };
         let pin = version.is_some();
         let refs = vec![ModRef {
           id: mod_id,
           version,
         }];
-        return shared.start_op(
-          target.clone(),
-          OpKind::Install,
-          move |lithic, reporter, cancel| {
-            async move {
-              let instance =
-                lithic.instance(&target).map_err(|e| e.to_string())?;
-              let opts = InstallOptions {
-                dependencies: true,
-                pin_versions: pin,
-                reporter,
-                cancel,
-                ..InstallOptions::default()
-              };
-              lithic
-                .install_mods(&instance, &refs, &opts)
-                .await
-                .map(|r| Outcome::Mods(Summary::from(&r)))
-                .map_err(|e| e.to_string())
+        return self.install(shared, refs, pin);
+      },
+      Message::Select(mod_id, on) => {
+        if on {
+          self.selected.insert(mod_id);
+        } else {
+          self.selected.remove(&mod_id);
+        }
+      },
+      Message::ClearSelection => self.selected.clear(),
+      Message::InstallSelected => {
+        let refs = self
+          .selected
+          .iter()
+          .map(|id| {
+            ModRef {
+              id:      id.clone(),
+              version: None,
             }
-          },
-        );
+          })
+          .collect::<Vec<_>>();
+        if refs.is_empty() {
+          return Task::none();
+        }
+        return self.install(shared, refs, false);
       },
       Message::Update(mod_id) => {
         let Some(target) = self.target_id(shared).map(ToString::to_string)
@@ -635,10 +680,10 @@ impl State {
       )
     };
     let page = widget::page(t("nav-browse"), picker, self.content(shared));
-    match self.details(shared) {
-      Some(details) => widget::modal(page, details, Message::CloseDetails),
-      None => page,
-    }
+    widget::layered(
+      page,
+      self.details(shared).map(|d| (d, Message::CloseDetails)),
+    )
   }
 
   /// Search controls and results, without a page frame.
@@ -676,7 +721,7 @@ impl State {
           .style(style::muted),
       );
     }
-    let controls = column![
+    let mut controls = column![
       row![
         widget::input(&t("browse-search"), &self.query)
           .on_input(Message::Query)
@@ -738,17 +783,48 @@ impl State {
       },
     };
 
-    let mut body = column![controls].spacing(12).height(Fill);
+    // Notices go at the end of `controls` rather than before the list, so
+    // the list keeps its tree position and scroll offset when they appear.
     if shared.instances.is_empty() {
-      body =
-        body.push(widget::notice(text(t("browse-no-instances")), Tone::Warn));
+      controls = controls
+        .push(widget::notice(text(t("browse-no-instances")), Tone::Warn));
     }
     if let Some(b) = busy
       && !self.locked
     {
-      body = body.push(widget::notice(text(b.label()), Tone::Neutral));
+      controls = controls.push(widget::notice(text(b.label()), Tone::Neutral));
     }
-    body.push(list).into()
+    let mut body = column![controls, list].spacing(12).height(Fill);
+    if !self.selected.is_empty() {
+      body = body.push(self.selection_bar(shared, busy.is_some()));
+    }
+    body.into()
+  }
+
+  fn selection_bar<'a>(
+    &'a self,
+    shared: &'a Shared,
+    busy: bool,
+  ) -> Element<'a, Message> {
+    widget::card(
+      row![
+        text(t1("browse-selected", "count", self.selected.len())).width(Fill),
+        widget::ghost(
+          t("browse-clear-selection"),
+          Some(Message::ClearSelection)
+        ),
+        widget::primary_icon(
+          Icon::Download,
+          t("browse-install-selected"),
+          (!busy && self.target_id(shared).is_some())
+            .then_some(Message::InstallSelected),
+        ),
+      ]
+      .spacing(8)
+      .align_y(Center),
+    )
+    .padding([8, 12])
+    .into()
   }
 
   /// The open mod's details, to lay over whatever holds this view.
@@ -860,7 +936,7 @@ impl State {
       ))
       .padding(7)
       .style(style::btn(Kind::Ghost))
-      .on_press(Message::Favorite(mod_id)),
+      .on_press(Message::Favorite(mod_id.clone())),
       t(if favorite {
         "browse-unfavorite"
       } else {
@@ -868,8 +944,22 @@ impl State {
       }),
     );
 
+    let selected = self.selected.contains(&mod_id);
+    let select = widget::tip(
+      checkbox(selected).on_toggle_maybe(
+        (installed.is_none() || selected)
+          .then_some(move |on| Message::Select(mod_id.clone(), on)),
+      ),
+      t(if selected {
+        "browse-unselect"
+      } else {
+        "browse-select"
+      }),
+    );
+
     container(
       row![
+        select,
         Self::logo(shared, m.logo.as_ref(), 40.0),
         column![
           text(&m.name).size(15).font(widget::bold()),
@@ -1189,6 +1279,31 @@ mod tests {
     assert_eq!(state.results, [1]);
     let _ = state.update(Message::HideInstalled(false), &mut shared);
     assert_eq!(state.results, [0, 1]);
+  }
+
+  #[test]
+  fn installing_keeps_paging_and_prunes_selection() {
+    let (_dir, mut shared) = shared();
+    let mut s = State::for_instance("main", AppMessage::Browse);
+    let pool: Vec<ModSummary> = (0..100)
+      .map(|i| summary(i, &format!("Mod {i}"), &format!("m{i}"), i))
+      .collect();
+    s.request = 1;
+    let _ = s.update(Message::PoolLoaded(1, None, Ok(pool)), &mut shared);
+    let _ = s.update(Message::More, &mut shared);
+    let _ = s.update(Message::Select("m1".into(), true), &mut shared);
+    let _ = s.update(Message::Select("m2".into(), true), &mut shared);
+
+    let installed = HashMap::from([("m1".to_string(), "1.0".to_string())]);
+    let _ = s.update(
+      Message::Installed(Some("main".into()), Ok(installed)),
+      &mut shared,
+    );
+    assert_eq!(s.shown, PAGE * 2, "an install must not collapse the list");
+    assert_eq!(s.selected, BTreeSet::from(["m2".to_string()]));
+
+    let _ = s.update(Message::ClearSelection, &mut shared);
+    assert!(s.selected.is_empty());
   }
 
   #[test]

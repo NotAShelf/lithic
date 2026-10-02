@@ -165,14 +165,26 @@ pub fn modal<'a, M: Clone + 'a>(
   dialog: impl Into<Element<'a, M>>,
   on_dismiss: M,
 ) -> Element<'a, M> {
-  stack![
-    base.into(),
-    opaque(
-      mouse_area(center(opaque(dialog)).style(style::backdrop))
-        .on_press(on_dismiss)
-    )
-  ]
-  .into()
+  layered(base, Some((dialog.into(), on_dismiss)))
+}
+
+/// XXX: `base` with an optional dialog over it. The stack is kept when there is
+/// no dialog and iced matches widget state by tree position. Which means that
+/// wrapping and unwrapping `base` would reset its scroll offsets and inputs.
+pub fn layered<'a, M: Clone + 'a>(
+  base: impl Into<Element<'a, M>>,
+  dialog: Option<(Element<'a, M>, M)>,
+) -> Element<'a, M> {
+  let top: Element<'a, M> = match dialog {
+    Some((dialog, on_dismiss)) => {
+      opaque(
+        mouse_area(center(opaque(dialog)).style(style::backdrop))
+          .on_press(on_dismiss),
+      )
+    },
+    None => space().into(),
+  };
+  stack![base.into(), top].into()
 }
 
 /// The frame all dialogs share.
