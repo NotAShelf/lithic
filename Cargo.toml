@@ -3,7 +3,7 @@ members  = [ "packages/*", "crates/*" ]
 resolver = "3"
 
 [workspace.package]
-version      = "2.0.0"
+version      = "2.1.0"
 edition      = "2024"
 rust-version = "1.97.1"
 license      = "MPL-2.0"
@@ -14,11 +14,11 @@ repository   = "https://github.com/NotAShelf/lithic"
 
 [workspace.dependencies]
 # Workspace components
-lithic-cli    = { path = "packages/lithic-cli", version = "2.0.0" }
-lithic-core   = { path = "crates/lithic-core", version = "2.0.0" }
-lithic-gui    = { path = "packages/lithic-gui", version = "2.0.0" }
-lithic-icons  = { path = "crates/lithic-icons", version = "2.0.0" }
-lithic-locale = { path = "crates/lithic-locale", version = "2.0.0" }
+lithic-cli    = { path = "packages/lithic-cli", version = "2.1.0" }
+lithic-core   = { path = "crates/lithic-core", version = "2.1.0" }
+lithic-gui    = { path = "packages/lithic-gui", version = "2.1.0" }
+lithic-icons  = { path = "crates/lithic-icons", version = "2.1.0" }
+lithic-locale = { path = "crates/lithic-locale", version = "2.1.0" }
 
 clap = { version = "4.6.7", features = [ "color", "suggestions", "derive" ] }
 clap_complete = "4.6.11"

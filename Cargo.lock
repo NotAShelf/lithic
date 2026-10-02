@@ -3036,7 +3036,7 @@ checksum = "92daf443525c4cce67b150400bc2316076100ce0b3686209eb8cf3c31612e6f0"
 
 [[package]]
 name = "lithic"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "lithic-cli",
  "lithic-gui",
@@ -3044,7 +3044,7 @@ dependencies = [
 
 [[package]]
 name = "lithic-cli"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "clap",
  "clap_complete",
@@ -3066,7 +3066,7 @@ dependencies = [
 
 [[package]]
 name = "lithic-core"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "dirs 7.0.0",
  "flate2",
@@ -3092,7 +3092,7 @@ dependencies = [
 
 [[package]]
 name = "lithic-gui"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "futures",
  "iced",
@@ -3112,14 +3112,14 @@ dependencies = [
 
 [[package]]
 name = "lithic-icons"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "iced",
 ]
 
 [[package]]
 name = "lithic-locale"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "fluent",
  "unic-langid",
