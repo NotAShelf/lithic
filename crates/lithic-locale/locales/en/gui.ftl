@@ -365,6 +365,16 @@ settings-mods = Mods
 settings-prerelease = Offer pre-release mod versions
 settings-prerelease-hint = When off, versions like 2.0.0-dev.3 are used only if a mod has nothing else for your game version.
 settings-concurrency = Parallel downloads
+settings-index-age = Refresh the mod list after
+settings-index-age-hint = The ModDB mod list is kept on disk and fetched again once it is older than this. The refresh button in Browse always fetches it.
+settings-index-age-hours = { $count ->
+    [one] 1 hour
+   *[other] { $count } hours
+}
+settings-index-age-days = { $count ->
+    [one] 1 day
+   *[other] { $count } days
+}
 settings-backups = Back up mods before replacing or removing them
 settings-backups-keep = Copies to keep per mod
 settings-backups-dir = Backup folder

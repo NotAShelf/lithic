@@ -28,7 +28,7 @@ use native_theme_iced::{Theme as NativeTheme, from_preset};
 
 use crate::{
   app::{Message as AppMessage, Page, Shared},
-  i18n::t,
+  i18n::{t, t1},
   style,
   task::{blocking, pick_folder},
   theme,
@@ -127,6 +127,34 @@ impl fmt::Display for StartPage {
   }
 }
 
+/// How many hours the cached mod list is used before it is fetched again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct IndexAge(u32);
+
+impl IndexAge {
+  const PRESETS: [u32; 7] = [1, 3, 6, 12, 24, 72, 168];
+
+  /// The presets, plus `current` if it was set to something else by hand.
+  fn choices(current: u32) -> Vec<Self> {
+    let mut all: Vec<Self> = Self::PRESETS.into_iter().map(Self).collect();
+    if !Self::PRESETS.contains(&current) {
+      all.push(Self(current));
+      all.sort();
+    }
+    all
+  }
+}
+
+impl fmt::Display for IndexAge {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    f.write_str(&if self.0.is_multiple_of(24) {
+      t1("settings-index-age-days", "count", self.0 / 24)
+    } else {
+      t1("settings-index-age-hours", "count", self.0)
+    })
+  }
+}
+
 /// The theme for the current settings. Without a known system preference,
 /// Lithic starts dark.
 pub fn resolve_theme(gui: &GuiSettings, system: Option<&Theme>) -> Theme {
@@ -177,6 +205,7 @@ pub enum Change {
   StartPage(StartPage),
   AllowPrerelease(bool),
   Concurrency(usize),
+  IndexAge(u32),
   Backups(bool),
   BackupsKeep(usize),
   BackupDir(Option<PathBuf>),
@@ -191,6 +220,7 @@ impl Change {
       Self::StartPage(page) => s.gui.initial_page = page.key().to_string(),
       Self::AllowPrerelease(on) => s.mods.allow_prerelease = *on,
       Self::Concurrency(n) => s.mods.concurrency = *n,
+      Self::IndexAge(hours) => s.mods.index_max_age_hours = *hours,
       Self::Backups(on) => s.backups.enabled = *on,
       Self::BackupsKeep(n) => s.backups.keep = *n,
       Self::BackupDir(dir) => s.backups.dir.clone_from(dir),
@@ -378,6 +408,16 @@ fn mods(shared: &Shared) -> Vec<Element<'_, Message>> {
       widget::select(counts, Some(s.mods.concurrency), |n| {
         Message::Change(Change::Concurrency(n))
       })
+      .width(CONTROL_WIDTH),
+    ),
+    widget::setting_row(
+      t("settings-index-age"),
+      Some(t("settings-index-age-hint")),
+      widget::select(
+        IndexAge::choices(s.mods.index_max_age_hours),
+        Some(IndexAge(s.mods.index_max_age_hours)),
+        |a| Message::Change(Change::IndexAge(a.0)),
+      )
       .width(CONTROL_WIDTH),
     ),
     widget::setting_row(
