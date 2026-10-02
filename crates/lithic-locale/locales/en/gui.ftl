@@ -283,6 +283,14 @@ browse-sort-trending = Trending
 browse-sort-updated = Recently updated
 browse-sort-follows = Most followed
 browse-sort-name = Name
+browse-select = Select for installing together
+browse-unselect = Remove from the selection
+browse-selected = { $count ->
+    [one] 1 mod selected
+   *[other] { $count } mods selected
+}
+browse-install-selected = Install selected
+browse-clear-selection = Clear
 
 ## Game versions
 

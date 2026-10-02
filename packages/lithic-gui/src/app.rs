@@ -939,31 +939,28 @@ impl App {
 
     let layout =
       row![self.sidebar(), container(content).width(Fill).height(Fill)];
-    let with_toasts: Element<Message> = if self.shared.toasts.is_empty() {
-      layout.into()
+    // Both layers stay in the tree even when empty, so a toast appearing
+    // does not reset the page's state.
+    let toasts: Element<Message> = if self.shared.toasts.is_empty() {
+      space().into()
     } else {
-      stack![
-        layout,
-        container(self.shared.toasts.view().map(Message::Toast))
-          .padding(16)
-          .width(Fill)
-          .height(Fill)
-          .align_right(Fill)
-          .align_bottom(Fill),
-      ]
-      .into()
+      container(self.shared.toasts.view().map(Message::Toast))
+        .padding(16)
+        .width(Fill)
+        .height(Fill)
+        .align_right(Fill)
+        .align_bottom(Fill)
+        .into()
     };
+    let with_toasts = stack![layout, toasts];
 
-    match &self.dialog {
-      None => with_toasts,
-      Some(dialog) => {
-        widget::modal(
-          with_toasts,
-          self.dialog_view(dialog),
-          Message::CloseDialog,
-        )
-      },
-    }
+    widget::layered(
+      with_toasts,
+      self
+        .dialog
+        .as_ref()
+        .map(|dialog| (self.dialog_view(dialog), Message::CloseDialog)),
+    )
   }
 
   fn dialog_view<'a>(&'a self, dialog: &'a Dialog) -> Element<'a, Message> {
