@@ -148,8 +148,10 @@ $ lithic pack import survival.zip --name "Friend's pack"
 
 `lithic settings show` lists the settings you can change with
 `lithic settings set <key> <value>`, for example turning on backups of replaced
-mods with `lithic settings set backups.enabled true`. The colours of the `list`
-and `search` tables can be changed with `lithic settings table`.
+mods with `lithic settings set backups.enabled true`. The ModDB mod list is
+cached and fetched again once it is older than `mods.index_max_age_hours` (6 by
+default). The colours of the `list` and `search` tables can be changed with
+`lithic settings table`.
 
 Shell completions come from `lithic completions bash` (or `zsh`, `fish`,
 `powershell`, `elvish`).
