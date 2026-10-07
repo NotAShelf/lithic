@@ -8,6 +8,7 @@
   mold,
   pkg-config,
   taplo,
+  openssl,
   libxkbcommon,
   vulkan-loader,
   wayland,
@@ -23,6 +24,7 @@
 }: let
   lithicPkg = self.packages.${stdenv.hostPlatform.system}.lithic;
   runtimeInputs = lib.makeLibraryPath [
+    openssl
     libxkbcommon
     vulkan-loader
     wayland

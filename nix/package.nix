@@ -34,6 +34,7 @@
   # winit loads windowing libraries at runtime; Vintage Story and its crash
   # reporter also load graphics and audio libraries from the inherited path.
   runtimeInputs = [
+    openssl
     libxkbcommon
     vulkan-loader
     wayland
