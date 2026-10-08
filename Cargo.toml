@@ -29,7 +29,7 @@ futures = "0.3.34"
 html2text = "0.17.1"
 indicatif = { version = "0.18.6", features = [ "tokio" ] }
 ini-edit = "0.3.2"
-jiff = "0.2.37"
+jiff = "0.2.38"
 keyring = "4.2.0"
 lenient_semver = "0.4.2"
 md-5 = "0.11.0"
@@ -43,7 +43,7 @@ shell-words = "1.1.1"
 tar = "0.4.46"
 tempfile = "3.27.0"
 thiserror = "2.0.21"
-tokio = { version = "1.53.1", features = [
+tokio = { version = "1.53.2", features = [
   "fs",
   "rt-multi-thread",
   "macros",
@@ -52,7 +52,7 @@ tokio = { version = "1.53.1", features = [
   "sync",
   "time",
 ] }
-toml = { version = "1.1.6", features = [ "preserve_order" ] }
+toml = { version = "1.1.7", features = [ "preserve_order" ] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = [ "env-filter" ] }
 zip = { version = "8.6.0", default-features = false, features = [ "deflate" ] }
@@ -71,7 +71,7 @@ iced = { version = "0.14.0", default-features = false, features = [
   "svg",
   "sipper",
 ] }
-native-theme-iced = "0.5.9"
+native-theme-iced = "0.6.0"
 opener = "0.9.0"
 rfd = { version = "0.17.2", default-features = false, features = [ "xdg-portal" ] }
 
