@@ -58,10 +58,22 @@ tracing-subscriber = { version = "0.3.23", features = [ "env-filter" ] }
 zip = { version = "8.6.0", default-features = false, features = [ "deflate" ] }
 
 # GUI deps
-iced              = { version = "0.14.0", features = [ "tokio", "image", "svg", "sipper" ] }
+iced = { version = "0.14.0", default-features = false, features = [
+  "wgpu",
+  "crisp",
+  "web-colors",
+  "thread-pool",
+  "linux-theme-detection",
+  "x11",
+  "wayland",
+  "tokio",
+  "image",
+  "svg",
+  "sipper",
+] }
 native-theme-iced = "0.5.9"
-opener            = "0.9.0"
-rfd               = { version = "0.17.2", default-features = false, features = [ "xdg-portal" ] }
+opener = "0.9.0"
+rfd = { version = "0.17.2", default-features = false, features = [ "xdg-portal" ] }
 
 # Translations
 fluent      = "0.17.0"
